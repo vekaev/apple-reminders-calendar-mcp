@@ -9,6 +9,7 @@
 
 import EventKit
 import Foundation
+import ReminderKitBridge
 import Darwin
 
 // MARK: - Tiny test framework
@@ -207,6 +208,13 @@ func removeLeftovers(matching stamp: String? = nil) -> [String] {
     var problems: [String] = []
     for attempt in 0..<5 {
         fresh()
+        // List groups aren't visible to EventKit; remove ours through ReminderKit (test cleanup only — the server has no delete).
+        if let snap = try? RKBridge.listsAndGroups() {
+            for g in snap["groups"] as? [[String: Any]] ?? [] {
+                guard let name = g["name"] as? String, name.hasPrefix("[e2e] "), stamp.map(name.contains) ?? true, let id = g["id"] as? String else { continue }
+                do { try RKBridge.deleteGroup(id) } catch { problems.append("\(name): \(error.localizedDescription)") }
+            }
+        }
         let lists = ek.calendars(for: .reminder).filter { $0.title.hasPrefix("[e2e] ") && (stamp.map($0.title.contains) ?? true) }
         let cals = ek.calendars(for: .event).filter { $0.title.hasPrefix("[e2e] ") && (stamp.map($0.title.contains) ?? true) }
         if lists.isEmpty && cals.isEmpty { return [] }
@@ -278,7 +286,8 @@ let realIDs = Set(ek.calendars(for: .reminder).map(\.calendarIdentifier))
 check(reportedIDs == realIDs, "every Reminders list is reported exactly once", "\(reportedIDs.symmetricDifference(realIDs).count) differ")
 check(reportedIDs.contains(listA.calendarIdentifier) && reportedIDs.contains(listB.calendarIdentifier), "new sandbox lists show up")
 check(reported.count == reportedIDs.count, "no list is reported twice")
-check(groups.allSatisfy { !($0["name"] as? String ?? "").isEmpty && !($0["lists"] as? [JSON] ?? []).isEmpty }, "every group has a name and at least one list", "\(groups.count) groups")
+check(groups.allSatisfy { !($0["name"] as? String ?? "").isEmpty }, "every group has a name (empty groups are listed too)", "\(groups.count) groups")
+check(groups.contains { !($0["lists"] as? [JSON] ?? []).isEmpty } || groups.isEmpty, "groups show the lists inside them")
 if groups.isEmpty { skip("group contents", "this account has no list groups") }
 let openCount = reported.first { $0["id"] as? String == listA.calendarIdentifier }?["open"] as? Int
 check(openCount == 0, "empty sandbox list reports 0 open")
@@ -491,6 +500,101 @@ let backup = (try? JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileU
 check(FileManager.default.fileExists(atPath: backupPath), "every apply writes a backup file")
 let before = (backup?["before"] as? [JSON])?.first
 check(before?["id"] as? String == emojiID && before?["notes"] as? String == "before backup check", "the backup holds the state before the change")
+
+// MARK: - More reminder controls (urgent, start, alarms, repeat, subtasks, copy, lists and groups)
+
+func storedUrgent(_ id: String) -> Bool? { (try? RKBridge.urgent(ofReminder: id))?.boolValue }
+func ekAlarms(_ id: String) -> [EKAlarm] { ekReminder(id)?.alarms ?? [] }
+func listJSON() -> JSON { server.tool("reminders_lists").value as? JSON ?? [:] }
+func groupNamed(_ name: String) -> JSON? { (listJSON()["groups"] as? [JSON] ?? []).first { $0["name"] as? String == name } }
+
+section("Urgent")
+let urgentTitle = "\(prefix) urgent \(stamp)"
+r = server.change([["op": "create", "title": urgentTitle, "list": listA.calendarIdentifier, "due": "2030-04-01 10:00", "urgent": true]])
+let urgentID = (r.result?["created"] as? [JSON])?.first?["id"] as? String ?? ""
+check(r.error == nil, "create an urgent reminder", r.error ?? "")
+check(storedUrgent(urgentID) == true, "it's stored as urgent")
+check(server.get(["list": listA.calendarIdentifier]).first { $0["id"] as? String == urgentID }?["urgent"] as? Bool == true, "reading shows urgent")
+check(server.get(["list": listA.calendarIdentifier, "urgent": true]).compactMap { $0["id"] as? String } == [urgentID], "filter by urgent")
+r = server.change([["op": "update", "id": urgentID, "urgent": false]])
+check(storedUrgent(urgentID) == false, "un-mark urgent")
+r = server.change([["op": "update", "id": urgentID, "urgent": true]])
+check(storedUrgent(urgentID) == true, "mark urgent on an existing reminder")
+
+section("Start date, alarms, repeat")
+r = server.change([["op": "update", "id": urgentID, "start": "2030-03-30"]])
+check(dayString(ekReminder(urgentID)?.startDateComponents) == "2030-03-30", "set the start date")
+r = server.change([["op": "update", "id": urgentID, "start": ""]])
+check(ekReminder(urgentID)?.startDateComponents == nil, "clear the start date")
+r = server.change([["op": "update", "id": urgentID, "alarms": ["2030-04-01 08:30", "-15m"]]])
+var al = ekAlarms(urgentID)
+let absolute = al.compactMap(\.absoluteDate).map { Calendar.current.dateComponents([.hour, .minute], from: $0) }
+check(al.count == 2, "two alarms set", "\(al.count)")
+check(absolute.contains { $0.hour == 8 && $0.minute == 30 }, "…one at 08:30")
+check(al.contains { $0.absoluteDate == nil && $0.relativeOffset == -15 * 60 } || absolute.contains { $0.hour == 9 && $0.minute == 45 }, "…one 15 min before the due time")
+r = server.change([["op": "update", "id": urgentID, "alarms": []]])
+check(ekAlarms(urgentID).isEmpty, "clear alarms")
+r = server.change([["op": "update", "id": urgentID, "repeat": ["every": "week", "interval": 2]]])
+let rule = ekReminder(urgentID)?.recurrenceRules?.first
+check(rule?.frequency == .weekly && rule?.interval == 2, "repeat every 2 weeks", "\(String(describing: rule))")
+check(server.get(["list": listA.calendarIdentifier]).first { $0["id"] as? String == urgentID }?["repeat"] as? String == "every 2 weeks", "reading shows the repeat")
+r = server.change([["op": "update", "id": urgentID, "repeat": "none"]])
+check((ekReminder(urgentID)?.recurrenceRules ?? []).isEmpty, "stop repeating")
+check(server.plan([["op": "update", "id": emojiID, "repeat": ["every": "fortnight"]]]).id == nil, "unknown repeat refused")
+check(server.plan([["op": "update", "id": emojiID, "alarms": ["soon"]]]).id == nil, "unreadable alarm refused")
+
+section("Subtasks")
+r = server.change([["op": "add_subtasks", "id": urgentID, "titles": ["Step one \(stamp)", "Step two \(stamp)"]]])
+check(r.error == nil, "add subtasks", r.error ?? "")
+let subs = server.get(["list": listA.calendarIdentifier]).filter { $0["parentId"] as? String == urgentID }
+check(Set(subs.compactMap { $0["title"] as? String }) == ["Step one \(stamp)", "Step two \(stamp)"], "both subtasks are under the reminder", "\(subs.count)")
+check(subs.allSatisfy { ekReminder($0["id"] as? String ?? "")?.calendar.calendarIdentifier == listA.calendarIdentifier }, "…in the same list")
+
+section("Copy")
+_ = server.change([["op": "update", "id": urgentID, "addTags": [tagA], "flagged": true, "notes": "copy me", "priority": 5]])
+r = server.change([["op": "copy", "id": urgentID, "list": listB.calendarIdentifier]])
+let copyID = (r.result?["created"] as? [JSON])?.first?["id"] as? String ?? ""
+check(r.error == nil && !copyID.isEmpty && copyID != urgentID, "copy to another list", r.error ?? "")
+let orig = ekReminder(urgentID), cp = ekReminder(copyID)
+check(cp?.calendar.calendarIdentifier == listB.calendarIdentifier, "copy is in the target list")
+check(cp?.title == orig?.title && cp?.notes == "copy me" && cp?.priority == 5 && dayString(cp?.dueDateComponents) == "2030-04-01", "copy keeps title, notes, priority, due date")
+let cpJSON = server.get(["list": listB.calendarIdentifier]).first { $0["id"] as? String == copyID }
+check((cpJSON?["tags"] as? [String]) == [tagA] && cpJSON?["flagged"] as? Bool == true && cpJSON?["urgent"] as? Bool == true, "copy keeps tags, flag and urgent")
+check(server.get(["list": listB.calendarIdentifier]).filter { $0["parentId"] as? String == copyID }.count == 2, "copy brings its subtasks")
+check(ekReminder(urgentID)?.calendar.calendarIdentifier == listA.calendarIdentifier, "the original stays where it was")
+r = server.change([["op": "copy", "id": emojiID, "newTitle": "\(prefix) copy title \(stamp)"]])
+let copy2 = (r.result?["created"] as? [JSON])?.first?["id"] as? String ?? ""
+check(ekReminder(copy2)?.title == "\(prefix) copy title \(stamp)" && ekReminder(copy2)?.calendar.calendarIdentifier == listA.calendarIdentifier, "copy in the same list with a new title")
+
+section("Lists and groups")
+let groupName = "\(prefix) Group \(stamp)", newListName = "\(prefix) New list \(stamp)"
+r = server.change([["op": "create_group", "name": groupName]])
+check(r.error == nil, "create a list group", r.error ?? "")
+var waited = 0
+while groupNamed(groupName) == nil && waited < 15 { Thread.sleep(forTimeInterval: 1); waited += 1 }
+let gid = groupNamed(groupName)?["id"] as? String ?? ""
+check(!gid.isEmpty, "the group shows up")
+r = server.change([["op": "create_list", "name": newListName, "group": gid]])
+let newListID = (r.result?["created"] as? [JSON])?.first?["id"] as? String ?? ""
+fresh()
+check(ek.calendars(for: .reminder).contains { $0.calendarIdentifier == newListID && $0.title == newListName }, "create a list", r.error ?? "")
+waited = 0
+while !((groupNamed(groupName)?["lists"] as? [JSON]) ?? []).contains(where: { $0["id"] as? String == newListID }) && waited < 15 { Thread.sleep(forTimeInterval: 1); waited += 1 }
+check(((groupNamed(groupName)?["lists"] as? [JSON]) ?? []).contains { $0["id"] as? String == newListID }, "…inside the group")
+r = server.change([["op": "rename_list", "list": newListID, "name": newListName + " renamed"]])
+fresh()
+check(ek.calendar(withIdentifier: newListID)?.title == newListName + " renamed", "rename a list")
+r = server.change([["op": "move_list", "list": listB.calendarIdentifier, "group": groupName]])
+waited = 0
+while !((groupNamed(groupName)?["lists"] as? [JSON]) ?? []).contains(where: { $0["id"] as? String == listB.calendarIdentifier }) && waited < 15 { Thread.sleep(forTimeInterval: 1); waited += 1 }
+check(((groupNamed(groupName)?["lists"] as? [JSON]) ?? []).contains { $0["id"] as? String == listB.calendarIdentifier }, "move a list into a group", r.error ?? "")
+r = server.change([["op": "move_list", "list": listB.calendarIdentifier, "group": NSNull()]])
+waited = 0
+while ((groupNamed(groupName)?["lists"] as? [JSON]) ?? []).contains(where: { $0["id"] as? String == listB.calendarIdentifier }) && waited < 15 { Thread.sleep(forTimeInterval: 1); waited += 1 }
+check(!((groupNamed(groupName)?["lists"] as? [JSON]) ?? []).contains { $0["id"] as? String == listB.calendarIdentifier }, "take a list out of its group", r.error ?? "")
+check(server.plan([["op": "create_list", "name": ""]]).id == nil, "a list needs a name")
+check(server.plan([["op": "move_list", "list": listB.calendarIdentifier, "group": "No such group \(stamp)"]]).id == nil, "unknown group refused")
+check(server.plan([["op": "delete_list", "list": listB.calendarIdentifier]]).id == nil, "lists can't be deleted")
 
 // MARK: - Calendar
 

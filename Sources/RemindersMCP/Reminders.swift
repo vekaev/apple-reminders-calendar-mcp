@@ -92,6 +92,10 @@ final class Reminders {
             return rows.map { row in
                 var o = row as? JSON ?? [:]
                 o["list"] = names[o["listId"] as? String ?? ""] ?? ""
+                if o["recurring"] as? Bool == true, let id = o["id"] as? String,
+                   let rule = (ek.calendarItem(withIdentifier: id) as? EKReminder)?.recurrenceRules?.first {
+                    o["repeat"] = Schedule.describe(rule)
+                }
                 return o
             }
         }
@@ -142,6 +146,8 @@ final class Reminders {
         if let m = r.lastModifiedDate { o["modified"] = Dates.string(m) }
         if let url = r.url { o["urls"] = [url.absoluteString] }
         if r.hasRecurrenceRules { o["recurring"] = true }
+        if let rule = r.recurrenceRules?.first { o["repeat"] = Schedule.describe(rule) }
+        if let alarms = r.alarms, !alarms.isEmpty { o["alarms"] = alarms.count }
         return o
     }
 

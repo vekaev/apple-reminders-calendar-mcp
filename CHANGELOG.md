@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.0 — 2026-10-19
+- **Urgent** (read, filter, set), **start date**, **alarms** (at a time or before the due time), **repeat** (every day/week/month/year, interval, until).
+- **Copy** a reminder — to any list, optionally renamed — with notes, dates, repeat, alarms, tags, flag, urgent and subtasks.
+- **Subtasks**: add under a reminder.
+- **Lists and groups**: create a list (optionally in a group), rename a list, create a group, move a list into or out of a group. Empty groups are listed.
+- E2E: 145 checks (new: urgent, start, alarms, repeat, subtasks, copy, lists and groups); test cleanup also removes test groups.
+
 ## 0.2.0 — 2026-10-19
 - **Claude Desktop extension** (`.mcpb`): double-click to install; appears under Connectors.
 - **Automatic permission prompts**: the server re-launches itself as its own responsible process, so macOS asks for Reminders/Calendar access for it directly — even when the client app (e.g. Claude) has no Calendar usage description and macOS would otherwise refuse silently.

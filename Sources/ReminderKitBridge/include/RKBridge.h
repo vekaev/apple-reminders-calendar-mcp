@@ -20,6 +20,18 @@ NS_ASSUME_NONNULL_BEGIN
 + (nullable NSArray<NSString *> *)tagsOfReminder:(NSString *)identifier error:(NSError **)error NS_SWIFT_NAME(tags(ofReminder:));
 /// Replaces the reminder's tags (Reminders' Tags sidebar) with `tags` (names without '#'; empty clears).
 + (BOOL)setTags:(NSArray<NSString *> *)tags onReminder:(NSString *)identifier error:(NSError **)error;
+/// Whether the reminder is marked Urgent (nil if unknown).
++ (nullable NSNumber *)urgentOfReminder:(NSString *)identifier error:(NSError **)error NS_SWIFT_NAME(urgent(ofReminder:));
+/// Marks the reminder Urgent (an alarm that rings like a timer) or not.
++ (BOOL)setUrgent:(BOOL)urgent onReminder:(NSString *)identifier error:(NSError **)error;
+/// Adds subtasks under the reminder; returns their ids.
++ (nullable NSArray<NSString *> *)addSubtasks:(NSArray<NSString *> *)titles toReminder:(NSString *)identifier error:(NSError **)error NS_SWIFT_NAME(addSubtasks(_:toReminder:));
+/// Creates a list group in the account of `listInAccount` (any list id); returns the group id.
++ (nullable NSString *)createGroup:(NSString *)name inAccountOfList:(NSString *)listInAccount error:(NSError **)error NS_SWIFT_NAME(createGroup(_:inAccountOfList:));
+/// Puts a list into a group (nil takes it out of its group).
++ (BOOL)setGroup:(nullable NSString *)groupID forList:(NSString *)listID error:(NSError **)error NS_SWIFT_NAME(setGroup(_:forList:));
+/// Removes an (empty or not) list group; its lists move out of it. Used by tests to clean up — the server never deletes.
++ (BOOL)deleteGroup:(NSString *)groupID error:(NSError **)error;
 /// Sets or clears the flag.
 + (BOOL)setFlagged:(BOOL)flagged onReminder:(NSString *)identifier error:(NSError **)error;
 @end

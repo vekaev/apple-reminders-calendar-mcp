@@ -13,7 +13,8 @@ final class Planner {
     }
 
     static let maxOps = 100
-    static let reminderOps = ["create", "move", "complete", "reopen", "update"]
+    static let reminderOps = ["create", "move", "complete", "reopen", "update", "copy", "add_subtasks",
+                              "create_list", "rename_list", "create_group", "move_list"]
     static let eventOps = ["create_event", "update_event"]
 
     let reminders: Reminders
@@ -52,9 +53,12 @@ final class Planner {
         if Self.eventOps.contains(kind) { try calendars.ensureAccess() }
         try checkDates(op)
         let tagChanges = try tagEdits(op)
-        if (!tagChanges.add.isEmpty || !tagChanges.remove.isEmpty || op["flagged"] != nil) && !reminders.reminderKit {
-            throw ToolError("tags and flags need ReminderKit, which isn't available on this macOS version")
+        if (!tagChanges.add.isEmpty || !tagChanges.remove.isEmpty || op["flagged"] != nil || op["urgent"] != nil
+            || ["add_subtasks", "create_group", "move_list"].contains(kind)) && !reminders.reminderKit {
+            throw ToolError("tags, flags, urgent, subtasks and list groups need ReminderKit, which isn't available on this macOS version")
         }
+        _ = try Schedule.alarms(op["alarms"])
+        _ = try Schedule.repeatRule(op["repeat"])
         switch kind {
         case "create":
             guard let title = op["title"] as? String, !title.isEmpty else { throw ToolError("create needs a title") }
@@ -73,6 +77,37 @@ final class Planner {
             let d = details(op)
             guard !d.isEmpty else { throw ToolError("update has nothing to change") }
             return "update \(label)" + d
+        case "copy":
+            let source = try reminders.reminder(try id(op))
+            let to = try (op["list"] as? String).map(reminders.list) ?? source.calendar!
+            return "copy \(try reminders.label(source.calendarItemIdentifier)) → \(to.title)"
+                + ((op["newTitle"] as? String).map { " as \"\($0)\"" } ?? "") + " (with notes, dates, tags, flag, urgent, subtasks)"
+        case "add_subtasks":
+            let label = try reminders.label(try id(op))
+            let titles = (op["titles"] as? [String] ?? []).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            guard !titles.isEmpty else { throw ToolError("add_subtasks needs titles") }
+            return "add \(titles.count) subtask(s) to \(label): " + titles.joined(separator: "; ")
+        case "create_list":
+            let name = (op["name"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty else { throw ToolError("create_list needs a name") }
+            let group = try groupRef(op["group"])
+            if group != nil && !reminders.reminderKit { throw ToolError("list groups need ReminderKit") }
+            return "create list \"\(name)\"" + (group.map { " in group \($0.name)" } ?? "")
+        case "rename_list":
+            let list = try reminders.list(op["list"] as? String ?? "")
+            let name = (op["name"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty else { throw ToolError("rename_list needs a name") }
+            guard list.allowsContentModifications else { throw ToolError("\(list.title) can't be renamed") }
+            return "rename list \(list.title) → \(name)"
+        case "create_group":
+            let name = (op["name"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty else { throw ToolError("create_group needs a name") }
+            return "create list group \"\(name)\""
+        case "move_list":
+            let list = try reminders.list(op["list"] as? String ?? "")
+            guard op.keys.contains("group") else { throw ToolError("move_list needs a group (id or name, or null to take it out of its group)") }
+            let group = try groupRef(op["group"])
+            return group.map { "move list \(list.title) into group \($0.name)" } ?? "take list \(list.title) out of its group"
         case "create_event":
             guard let title = op["title"] as? String, !title.isEmpty else { throw ToolError("create_event needs a title") }
             guard let start = op["start"] as? String, Dates.parse(start) != nil else { throw ToolError("create_event needs a start") }
@@ -97,6 +132,17 @@ final class Planner {
     private func id(_ op: JSON) throws -> String {
         guard let id = op["id"] as? String, !id.isEmpty else { throw ToolError("\(op["op"] as? String ?? "op") needs an id") }
         return id
+    }
+
+    /// A list group by id or name (nil / NSNull = no group).
+    private func groupRef(_ value: Any?) throws -> Reminders.GroupInfo? {
+        guard let ref = value as? String, !ref.isEmpty else { return nil }
+        let groups = try reminders.listsAndGroups().groups
+        if let g = groups.first(where: { $0.id == ref }) { return g }
+        let named = groups.filter { $0.name.caseInsensitiveCompare(ref) == .orderedSame }
+        if named.count == 1 { return named[0] }
+        if named.count > 1 { throw ToolError("\(named.count) groups are named \"\(ref)\" — use an id: " + named.map(\.id).joined(separator: ", ")) }
+        throw ToolError("No list group \"\(ref)\". Call reminders_lists for groups.")
     }
 
     private func checkDates(_ op: JSON) throws {
@@ -126,6 +172,10 @@ final class Planner {
         if let tags = op["addTags"] as? [String], !tags.isEmpty { parts.append("add " + tags.map { "#\($0)" }.joined(separator: " ")) }
         if let tags = op["removeTags"] as? [String], !tags.isEmpty { parts.append("remove " + tags.map { "#\($0)" }.joined(separator: " ")) }
         if let f = op["flagged"] as? Bool { parts.append(f ? "flag" : "unflag") }
+        if let u = op["urgent"] as? Bool { parts.append(u ? "mark urgent" : "not urgent") }
+        if !event, let s = op["start"] as? String { parts.append(s.isEmpty ? "no start date" : "start \(s)") }
+        if let a = op["alarms"] as? [String] { parts.append(a.isEmpty ? "no alarms" : "alarms " + a.joined(separator: ", ")) }
+        if let r = op["repeat"] { parts.append((try? Schedule.repeatRule(r)).flatMap { $0 }.map { "repeat " + Schedule.describe($0) } ?? "stop repeating") }
         if let u = op["url"] as? String { parts.append(u.isEmpty ? "clear url" : "url \(u)") }
         if event, let l = op["location"] as? String { parts.append("location \(l)") }
         return parts.isEmpty ? "" : " — " + parts.joined(separator: ", ")
@@ -187,10 +237,36 @@ final class Planner {
             let r = EKReminder(eventStore: ek)
             r.title = op["title"] as? String
             r.calendar = try reminders.list(op["list"] as? String ?? (ek.defaultCalendarForNewReminders()?.calendarIdentifier ?? ""))
-            applyFields(op, to: r)
+            try applyFields(op, to: r)
             try ek.save(r, commit: true)
             try applyTagsAndFlag(op, id: r.calendarItemIdentifier)
             return ["op": "create", "id": r.calendarItemIdentifier, "title": r.title ?? ""]
+        case "copy":
+            return try copy(op)
+        case "add_subtasks":
+            let id = try id(op)
+            let titles = (op["titles"] as? [String] ?? []).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            let ids = try RKBridge.addSubtasks(titles, toReminder: id)
+            return ["op": "add_subtasks", "parent": id, "ids": ids]
+        case "create_list":
+            let cal = EKCalendar(for: .reminder, eventStore: ek)
+            cal.title = (op["name"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+            guard let source = ek.defaultCalendarForNewReminders()?.source else { throw ToolError("no Reminders account to create the list in") }
+            cal.source = source
+            try ek.saveCalendar(cal, commit: true)
+            if let group = try groupRef(op["group"]) { try putList(cal.calendarIdentifier, in: group.id) }
+            return ["op": "create_list", "id": cal.calendarIdentifier, "title": cal.title]
+        case "rename_list":
+            let cal = try reminders.list(op["list"] as? String ?? "")
+            cal.title = (op["name"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+            try ek.saveCalendar(cal, commit: true)
+        case "create_group":
+            guard let anyList = ek.defaultCalendarForNewReminders()?.calendarIdentifier else { throw ToolError("no Reminders account") }
+            let gid = try RKBridge.createGroup((op["name"] as? String ?? "").trimmingCharacters(in: .whitespaces), inAccountOfList: anyList)
+            return ["op": "create_group", "id": gid, "title": op["name"] as? String ?? ""]
+        case "move_list":
+            let cal = try reminders.list(op["list"] as? String ?? "")
+            try putList(cal.calendarIdentifier, in: try groupRef(op["group"])?.id)
         case "move":
             let r = try reminders.reminder(try id(op))
             r.calendar = try reminders.list(op["list"] as? String ?? "")
@@ -202,7 +278,7 @@ final class Planner {
         case "update":
             let id = try id(op)
             let r = try reminders.reminder(id)
-            applyFields(op, to: r)
+            try applyFields(op, to: r)
             if r.hasChanges { try ek.save(r, commit: true) }
             try applyTagsAndFlag(op, id: id)
         case "create_event":
@@ -224,7 +300,58 @@ final class Planner {
         return nil
     }
 
-    private func applyFields(_ op: JSON, to r: EKReminder) {
+    /// Puts a list in a group (nil: out of its group). A list created a moment ago may take a second to reach ReminderKit.
+    private func putList(_ listID: String, in groupID: String?) throws {
+        var lastError: Error?
+        for _ in 0..<20 {
+            do { try RKBridge.setGroup(groupID, forList: listID); return } catch { lastError = error; Thread.sleep(forTimeInterval: 0.5) }
+        }
+        throw lastError ?? ToolError("couldn't move the list")
+    }
+
+    /// A new reminder with the same content: title, notes, URL, dates, priority, repeat, alarms, tags, flag, urgent and
+    /// subtasks (the copy's subtasks are new, open reminders).
+    private func copy(_ op: JSON) throws -> JSON {
+        let ek = reminders.ek
+        let sourceID = try id(op)
+        let s = try reminders.reminder(sourceID)
+        let r = EKReminder(eventStore: ek)
+        r.title = (op["newTitle"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? s.title
+        r.calendar = try (op["list"] as? String).map(reminders.list) ?? s.calendar
+        r.notes = s.notes
+        r.url = s.url
+        r.priority = s.priority
+        r.dueDateComponents = s.dueDateComponents
+        r.startDateComponents = s.startDateComponents
+        for rule in s.recurrenceRules ?? [] { r.addRecurrenceRule(rule.copy() as! EKRecurrenceRule) }
+        for alarm in s.alarms ?? [] { r.addAlarm(alarm.copy() as! EKAlarm) }
+        try ek.save(r, commit: true)
+        let newID = r.calendarItemIdentifier
+        if reminders.reminderKit {
+            let tags = reminders.tags(of: sourceID)
+            if !tags.isEmpty { try RKBridge.setTags(tags, onReminder: newID) }
+            let info = try reminders.reminders(inLists: [s.calendar.calendarIdentifier], includeCompleted: true)
+            if info.first(where: { $0["id"] as? String == sourceID })?["flagged"] as? Bool == true { try RKBridge.setFlagged(true, onReminder: newID) }
+            if (try? RKBridge.urgent(ofReminder: sourceID))?.boolValue == true { try RKBridge.setUrgent(true, onReminder: newID) }
+            let subtasks = info.filter { $0["parentId"] as? String == sourceID }.compactMap { $0["title"] as? String }
+            if !subtasks.isEmpty { _ = try RKBridge.addSubtasks(subtasks, toReminder: newID) }
+        }
+        return ["op": "copy", "id": newID, "title": r.title ?? "", "from": sourceID]
+    }
+
+    private func applyFields(_ op: JSON, to r: EKReminder) throws {
+        if let s = op["start"] as? String { r.startDateComponents = s.isEmpty ? nil : Dates.components(s) }
+        if let alarms = try Schedule.alarms(op["alarms"]) {
+            for a in r.alarms ?? [] { r.removeAlarm(a) }
+            for a in alarms { r.addAlarm(a) }
+        }
+        if op["repeat"] != nil {
+            for rule in r.recurrenceRules ?? [] { r.removeRecurrenceRule(rule) }
+            if let rule = try Schedule.repeatRule(op["repeat"]) {
+                guard r.dueDateComponents != nil || op["due"] as? String != nil else { throw ToolError("a repeating reminder needs a due date") }
+                r.addRecurrenceRule(rule)
+            }
+        }
         if let t = op["newTitle"] as? String, !t.isEmpty { r.title = t }
         if let due = op["due"] as? String { r.dueDateComponents = due.isEmpty ? nil : Dates.components(due) }
         if let p = op["priority"] as? Int { r.priority = max(0, min(9, p)) }
@@ -243,6 +370,7 @@ final class Planner {
             try RKBridge.setTags(next, onReminder: id)
         }
         if let flagged = op["flagged"] as? Bool { try RKBridge.setFlagged(flagged, onReminder: id) }
+        if let urgent = op["urgent"] as? Bool { try RKBridge.setUrgent(urgent, onReminder: id) }
     }
 
     private func setTimes(_ op: JSON, on e: EKEvent, creating: Bool) throws {

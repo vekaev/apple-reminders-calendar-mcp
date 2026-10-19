@@ -25,6 +25,9 @@ Apple's public API (EventKit) [can't see list groups, tags, subtasks or flags](h
 | **List groups** (folders) | ✅ | ❌ | ❌ |
 | **Real tags** (Tags sidebar) — read and write | ✅ | ❌ / fake text tags | ❌ |
 | **Flags** — read and write | ✅ | ❌ | partly |
+| **Urgent**, start date, alarms, repeat — read and write | ✅ | partly | partly |
+| **Copy** a reminder (with tags, subtasks…) | ✅ | ❌ | ❌ |
+| Create **subtasks**, lists, **list groups**; move lists between groups | ✅ | lists only | ❌ |
 | **Subtasks** (parent link) | ✅ read | ❌ | ❌ |
 | **Link attachments** (e.g. shared Instagram/Safari links) | ✅ read | ❌ | ❌ |
 | Move reminders between lists | ✅ | varies | slow |
@@ -106,10 +109,14 @@ Operations for `plan_changes` (up to 100 per plan):
 
 | Op | Fields |
 |---|---|
-| `create` | `title`, `list?`, `due?`, `priority?`, `notes?`, `url?`, `tags?`, `flagged?` |
+| `create` | `title`, `list?`, `due?`, `start?`, `priority?`, `notes?`, `url?`, `tags?`, `flagged?`, `urgent?`, `alarms?`, `repeat?` |
 | `move` | `id`, `list` |
 | `complete` / `reopen` | `id` |
-| `update` | `id`, `newTitle?`, `due?` (`""` clears), `priority?` (0 none, 1 high, 5 medium, 9 low), `notes?`, `appendNotes?`, `url?`, `tags?` (replace), `addTags?`, `removeTags?`, `flagged?` |
+| `update` | `id`, `newTitle?`, `due?` / `start?` (`""` clears), `priority?` (0 none, 1 high, 5 medium, 9 low), `notes?`, `appendNotes?`, `url?`, `tags?` (replace), `addTags?`, `removeTags?`, `flagged?`, `urgent?`, `alarms?` (`["2026-10-25 09:00", "-15m", "-1d"]`, `[]` clears), `repeat?` (`{"every": "week", "interval": 2, "until": "2026-12-31"}` or `"none"`) |
+| `copy` | `id`, `list?`, `newTitle?` — duplicates notes, dates, repeat, alarms, tags, flag, urgent and subtasks |
+| `add_subtasks` | `id`, `titles` |
+| `create_list` / `rename_list` | `name`, `group?` / `list`, `name` |
+| `create_group` / `move_list` | `name` / `list`, `group` (id, name, or `null` to take it out) |
 | `create_event` | `title`, `start`, `end?`, `allDay?`, `calendar?`, `location?`, `notes?`, `url?` |
 | `update_event` | `id`, `newTitle?`, `start?`, `end?`, `location?`, `notes?`, `appendNotes?`, `url?` |
 
@@ -140,7 +147,7 @@ Known: Reminders.app on the same Mac doesn't always refresh right away for chang
 
 ## Roadmap
 
-- Create subtasks and list sections; read sections
+- List sections; location alarms
 - Signed and notarized release binary, Homebrew formula, MCP Registry listing
 - Smart lists and recurrence
 

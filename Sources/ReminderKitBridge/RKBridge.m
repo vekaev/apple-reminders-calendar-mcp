@@ -17,6 +17,7 @@
 - (NSArray *)fetchListsWithError:(NSError **)error;
 - (NSArray *)fetchRemindersAndSubtasksWithError:(NSError **)error;
 - (NSArray *)fetchRemindersWithError:(NSError **)error;
+- (NSArray *)fetchGroupsWithError:(NSError **)error;
 @end
 
 @interface REMSaveRequest : NSObject
@@ -28,6 +29,27 @@
 @interface REMReminderChangeItem : NSObject
 - (id)flaggedContext;
 - (id)hashtagContext;
+- (id)urgentAlarmContext;
+- (id)subtaskContext;
+- (id)remObjectID;
+@end
+
+@interface REMReminderUrgentAlarmContextChangeItem : NSObject
+- (void)setIsUrgentStateEnabledForCurrentUser:(BOOL)value;
+@end
+
+@interface NSObject (RKLists)
+- (id)updateList:(id)list;
+- (id)updateAccount:(id)account;
+- (id)groupContext;
+- (id)account;
+- (id)remObjectID;
+- (void)setParentOwnerID:(id)objectID;
+- (void)setParentSubContainerID:(id)objectID;
+- (void)removeFromParentWithAccountChangeItem:(id)accountChangeItem;
+- (id)addGroupWithName:(NSString *)name toAccountGroupContextChangeItem:(id)context;
+- (id)addGroupWithName:(NSString *)name toAccountGroupContextChangeItem:(id)context groupObjectID:(id)objectID;
+- (id)addReminderWithTitle:(NSString *)title toReminderSubtaskContextChangeItem:(id)context;
 @end
 
 @interface REMReminderHashtagContextChangeItem : NSObject
@@ -110,6 +132,14 @@ static NSError *RKError(NSString *message) {
             if ([KV(account, @"inactive") boolValue]) continue;
             NSString *accountName = [KV(account, @"name") description] ?: @"";
             NSString *accountID = UUIDOf(KV(account, @"objectID")) ?: @"";
+            // Every group of the account, including empty ones (lists only point at groups that contain them).
+            id groupContext = KV(account, @"groupContext");
+            if ([groupContext respondsToSelector:@selector(fetchGroupsWithError:)]) {
+                for (id g in [groupContext fetchGroupsWithError:nil] ?: @[]) {
+                    NSString *gid = UUIDOf(KV(g, @"objectID"));
+                    if (gid && !groups[gid]) groups[gid] = @{@"id": gid, @"name": [KV(g, @"name") description] ?: @"", @"account": accountName};
+                }
+            }
             NSArray *ls = [account respondsToSelector:@selector(fetchListsAndSublistsWithError:)]
                 ? [account fetchListsAndSublistsWithError:nil] : [account fetchListsWithError:nil];
             for (id list in ls) {
@@ -170,6 +200,9 @@ static NSError *RKError(NSString *message) {
                 NSString *start = ComponentsString(KV(r, @"startDateComponents"), NULL);
                 if (start) o[@"start"] = start;
                 o[@"flagged"] = @([KV(r, @"flagged") boolValue]);
+                if ([KV(r, @"isUrgentStateEnabledForCurrentUser") boolValue]) o[@"urgent"] = @YES;
+                id alarms = KV(r, @"alarms");
+                if ([alarms count]) o[@"alarms"] = @([alarms count]);
                 NSMutableArray *tags = [NSMutableArray array];
                 id hashtags = KV(r, @"hashtags");
                 for (id t in ([hashtags respondsToSelector:@selector(allObjects)] ? [hashtags allObjects] : hashtags)) {
@@ -260,6 +293,127 @@ static NSError *RKError(NSString *message) {
         }
         return YES;
     }];
+}
+
++ (nullable NSNumber *)urgentOfReminder:(NSString *)identifier error:(NSError **)error {
+    @try {
+        REMStore *store = [NSClassFromString(@"REMStore") new];
+        id reminder = [self fetch:identifier store:store error:error];
+        if (!reminder) return nil;
+        id v = KV(reminder, @"isUrgentStateEnabledForCurrentUser");
+        return [v isKindOfClass:[NSNumber class]] ? v : @NO;
+    } @catch (NSException *e) {
+        if (error) *error = RKError([NSString stringWithFormat:@"ReminderKit: %@", e.reason]);
+        return nil;
+    }
+}
+
++ (BOOL)setUrgent:(BOOL)urgent onReminder:(NSString *)identifier error:(NSError **)error {
+    return [self change:identifier error:error with:^BOOL(REMReminderChangeItem *change, NSError **err) {
+        id context = [change respondsToSelector:@selector(urgentAlarmContext)] ? [change urgentAlarmContext] : nil;
+        if (!context || ![context respondsToSelector:@selector(setIsUrgentStateEnabledForCurrentUser:)]) {
+            if (err) *err = RKError(@"Urgent reminders aren't available on this macOS version");
+            return NO;
+        }
+        [context setIsUrgentStateEnabledForCurrentUser:urgent];
+        return YES;
+    }];
+}
+
++ (nullable NSArray<NSString *> *)addSubtasks:(NSArray<NSString *> *)titles toReminder:(NSString *)identifier error:(NSError **)error {
+    NSMutableArray *ids = [NSMutableArray array];
+    @try {
+        REMStore *store = [NSClassFromString(@"REMStore") new];
+        id reminder = [self fetch:identifier store:store error:error];
+        if (!reminder) return nil;
+        REMSaveRequest *save = [[NSClassFromString(@"REMSaveRequest") alloc] initWithStore:store];
+        REMReminderChangeItem *change = [save updateReminder:reminder];
+        id context = [change respondsToSelector:@selector(subtaskContext)] ? [change subtaskContext] : nil;
+        if (!context || ![save respondsToSelector:@selector(addReminderWithTitle:toReminderSubtaskContextChangeItem:)]) {
+            if (error) *error = RKError(@"Subtasks aren't available on this macOS version");
+            return nil;
+        }
+        for (NSString *title in titles) {
+            id sub = [(id)save addReminderWithTitle:title toReminderSubtaskContextChangeItem:context];
+            NSString *sid = UUIDOf([sub remObjectID]);
+            if (sid) [ids addObject:sid];
+        }
+        if (![save saveSynchronouslyWithError:error]) return nil;
+        return ids;
+    } @catch (NSException *e) {
+        if (error) *error = RKError([NSString stringWithFormat:@"ReminderKit: %@", e.reason]);
+        return nil;
+    }
+}
+
++ (nullable id)fetchList:(NSString *)listID store:(REMStore *)store error:(NSError **)error {
+    NSURL *url = [NSURL URLWithString:[NSString stringWithFormat:@"x-apple-reminderkit://REMCDList/%@", listID]];
+    id oid = url ? [NSClassFromString(@"REMObjectID") objectIDWithURL:url] : nil;
+    id list = oid ? [store fetchListWithObjectID:oid error:nil] : nil;
+    if (!list) list = oid ? [store fetchListIncludingSpecialContainerWithObjectID:oid error:nil] : nil;
+    if (!list && error) *error = RKError([NSString stringWithFormat:@"List %@ not found", listID]);
+    return list;
+}
+
++ (nullable NSString *)createGroup:(NSString *)name inAccountOfList:(NSString *)listInAccount error:(NSError **)error {
+    @try {
+        REMStore *store = [NSClassFromString(@"REMStore") new];
+        id list = [self fetchList:listInAccount store:store error:error];
+        id account = list ? [list account] : nil;
+        if (!account) { if (error && !*error) *error = RKError(@"No Reminders account for that list"); return nil; }
+        REMSaveRequest *save = [[NSClassFromString(@"REMSaveRequest") alloc] initWithStore:store];
+        id accountChange = [(id)save updateAccount:account];
+        id groupContext = [accountChange respondsToSelector:@selector(groupContext)] ? [accountChange groupContext] : nil;
+        if (!groupContext) { if (error) *error = RKError(@"List groups aren't available for this account"); return nil; }
+        id change = [save respondsToSelector:@selector(addGroupWithName:toAccountGroupContextChangeItem:groupObjectID:)]
+            ? [(id)save addGroupWithName:name toAccountGroupContextChangeItem:groupContext groupObjectID:nil]
+            : [(id)save addGroupWithName:name toAccountGroupContextChangeItem:groupContext];
+        if (!change) { if (error) *error = RKError(@"Couldn't create the group"); return nil; }
+        if ([change respondsToSelector:@selector(setParentOwnerID:)]) [change setParentOwnerID:[account remObjectID]];
+        if (![save saveSynchronouslyWithError:error]) return nil;
+        return UUIDOf([change remObjectID]);
+    } @catch (NSException *e) {
+        if (error) *error = RKError([NSString stringWithFormat:@"ReminderKit: %@", e.reason]);
+        return nil;
+    }
+}
+
++ (BOOL)setGroup:(nullable NSString *)groupID forList:(NSString *)listID error:(NSError **)error {
+    @try {
+        REMStore *store = [NSClassFromString(@"REMStore") new];
+        id list = [self fetchList:listID store:store error:error];
+        if (!list) return NO;
+        id groupObjectID = nil;
+        if (groupID.length) {
+            groupObjectID = [NSClassFromString(@"REMObjectID") objectIDWithURL:[NSURL URLWithString:[NSString stringWithFormat:@"x-apple-reminderkit://REMCDList/%@", groupID]]];
+            if (![self fetchList:groupID store:store error:error]) return NO;
+        }
+        REMSaveRequest *save = [[NSClassFromString(@"REMSaveRequest") alloc] initWithStore:store];
+        id change = [(id)save updateList:list];
+        if (![change respondsToSelector:@selector(setParentSubContainerID:)]) { if (error) *error = RKError(@"Moving lists between groups isn't available"); return NO; }
+        if ([change respondsToSelector:@selector(setParentOwnerID:)]) [change setParentOwnerID:[[list account] remObjectID]];
+        [change setParentSubContainerID:groupObjectID];
+        return [save saveSynchronouslyWithError:error];
+    } @catch (NSException *e) {
+        if (error) *error = RKError([NSString stringWithFormat:@"ReminderKit: %@", e.reason]);
+        return NO;
+    }
+}
+
++ (BOOL)deleteGroup:(NSString *)groupID error:(NSError **)error {
+    @try {
+        REMStore *store = [NSClassFromString(@"REMStore") new];
+        id group = [self fetchList:groupID store:store error:error];
+        if (!group) return NO;
+        REMSaveRequest *save = [[NSClassFromString(@"REMSaveRequest") alloc] initWithStore:store];
+        id accountChange = [(id)save updateAccount:[group account]];
+        id change = [(id)save updateList:group];
+        [change removeFromParentWithAccountChangeItem:accountChange];
+        return [save saveSynchronouslyWithError:error];
+    } @catch (NSException *e) {
+        if (error) *error = RKError([NSString stringWithFormat:@"ReminderKit: %@", e.reason]);
+        return NO;
+    }
 }
 
 + (BOOL)setFlagged:(BOOL)flagged onReminder:(NSString *)identifier error:(NSError **)error {

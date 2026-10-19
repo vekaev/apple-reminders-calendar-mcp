@@ -3,10 +3,13 @@ import Foundation
 
 let opsDescription = """
 Reminder ops:
-• {op:"create", title, list?, due?, priority?, notes?, url?, tags?, flagged?}
+• {op:"create", title, list?, due?, start?, priority?, notes?, url?, tags?, flagged?, urgent?, alarms?, repeat?}
 • {op:"move", id, list}
 • {op:"complete", id} / {op:"reopen", id}
-• {op:"update", id, newTitle?, due? ("" clears), priority? (0 none, 1 high, 5 medium, 9 low), notes? ("" clears), appendNotes?, url?, tags? (replace all), addTags?, removeTags?, flagged?}
+• {op:"update", id, newTitle?, due? ("" clears), start? ("" clears), priority? (0 none, 1 high, 5 medium, 9 low), notes? ("" clears), appendNotes?, url?, tags? (replace all), addTags?, removeTags?, flagged?, urgent?, alarms? (["2026-10-25 09:00", "-15m", "-2h", "-1d"]; [] clears), repeat? ({every: day|week|month|year, interval?, until?} or "none")}
+• {op:"copy", id, list?, newTitle?} — duplicate with notes, dates, tags, flag, urgent, subtasks
+• {op:"add_subtasks", id, titles:[…]}
+• {op:"create_list", name, group?} · {op:"rename_list", list, name} · {op:"create_group", name} · {op:"move_list", list, group (id, name or null)}
 Calendar ops:
 • {op:"create_event", title, start, end?, allDay?, calendar?, location?, notes?, url?}
 • {op:"update_event", id, newTitle?, start?, end?, location?, notes?, appendNotes?, url?} (recurring: this occurrence only)
@@ -25,6 +28,7 @@ let tools: [JSON] = [
         "group": ["type": "string", "description": "List group id or name (all its lists)"],
         "tag": ["type": "string", "description": "Only reminders with this tag"],
         "flagged": ["type": "boolean"],
+        "urgent": ["type": "boolean"],
         "query": ["type": "string", "description": "Text in title, notes or links"],
         "dueBefore": ["type": "string", "description": "YYYY-MM-DD (exclusive)"],
         "dueAfter": ["type": "string", "description": "YYYY-MM-DD (inclusive)"],
@@ -147,6 +151,7 @@ final class Toolbox {
             items = items.filter { ($0["tags"] as? [String] ?? []).contains { $0.caseInsensitiveCompare(tag) == .orderedSame } }
         }
         if let flagged = args["flagged"] as? Bool { items = items.filter { ($0["flagged"] as? Bool ?? false) == flagged } }
+        if let urgent = args["urgent"] as? Bool { items = items.filter { ($0["urgent"] as? Bool ?? false) == urgent } }
         if let q = (args["query"] as? String)?.lowercased(), !q.isEmpty {
             items = items.filter { o in
                 [o["title"] as? String, o["notes"] as? String, (o["urls"] as? [String])?.joined(separator: " ")]
