@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key><string>dev.vekaev.reminders-mcp</string>
+    <key>CFBundleName</key><string>reminders-mcp</string>
+    <key>NSRemindersFullAccessUsageDescription</key><string>Lets your AI agents read and organize your reminders. Changes are previewed and need your approval.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key><string>Lets your AI agents read and plan your calendar. Changes are previewed and need your approval.</string>
+</dict>
+</plist>

@@ -1,0 +1,277 @@
+// Interfaces below are private ReminderKit API, declared the same way as viticci/remctl (MIT).
+#import "RKBridge.h"
+
+@interface REMObjectID : NSObject
++ (id)objectIDWithURL:(NSURL *)url;
+@end
+
+@interface REMStore : NSObject
+- (id)fetchReminderWithObjectID:(id)objectID error:(NSError **)error;
+- (NSArray *)fetchAccountsWithError:(NSError **)error;
+- (id)fetchListWithObjectID:(id)objectID error:(NSError **)error;
+- (id)fetchListIncludingSpecialContainerWithObjectID:(id)objectID error:(NSError **)error;
+@end
+
+@interface NSObject (RKAccountAndList)
+- (NSArray *)fetchListsAndSublistsWithError:(NSError **)error;
+- (NSArray *)fetchListsWithError:(NSError **)error;
+- (NSArray *)fetchRemindersAndSubtasksWithError:(NSError **)error;
+- (NSArray *)fetchRemindersWithError:(NSError **)error;
+@end
+
+@interface REMSaveRequest : NSObject
+- (instancetype)initWithStore:(REMStore *)store;
+- (id)updateReminder:(id)reminder;
+- (BOOL)saveSynchronouslyWithError:(NSError **)error;
+@end
+
+@interface REMReminderChangeItem : NSObject
+- (id)flaggedContext;
+- (id)hashtagContext;
+@end
+
+@interface REMReminderHashtagContextChangeItem : NSObject
+- (id)addHashtagWithType:(NSInteger)type name:(NSString *)name;
+- (void)removeAllHashtags;
+@end
+
+@interface REMReminderFlaggedContextChangeItem : NSObject
+- (void)setFlagged:(NSInteger)flagged;
+@end
+
+@interface REMReminder : NSObject
+- (NSString *)titleAsString;
+@end
+
+static id KV(id object, NSString *key) {
+    @try { return [object valueForKey:key]; } @catch (__unused NSException *e) { return nil; }
+}
+
+static NSString *UUIDOf(id objectID) {
+    id uuid = KV(objectID, @"uuid");
+    return [uuid isKindOfClass:[NSUUID class]] ? [(NSUUID *)uuid UUIDString] : nil;
+}
+
+static NSString *ISODate(NSDate *date) {
+    static NSISO8601DateFormatter *f;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ f = [NSISO8601DateFormatter new]; f.timeZone = NSTimeZone.localTimeZone; });
+    return date ? [f stringFromDate:date] : nil;
+}
+
+/// "2026-10-20" for an all-day date, "2026-10-20T14:30:00-07:00" with a time.
+static NSString *ComponentsString(NSDateComponents *c, BOOL *hasTime) {
+    if (![c isKindOfClass:[NSDateComponents class]] || c.year == NSDateComponentUndefined) return nil;
+    BOOL time = c.hour != NSDateComponentUndefined;
+    if (hasTime) *hasTime = time;
+    if (!time) return [NSString stringWithFormat:@"%04ld-%02ld-%02ld", (long)c.year, (long)c.month, (long)c.day];
+    NSCalendar *cal = [NSCalendar currentCalendar];
+    NSDate *d = [cal dateFromComponents:c];
+    return ISODate(d);
+}
+
+static NSError *RKError(NSString *message) {
+    return [NSError errorWithDomain:@"ReminderKitBridge" code:1 userInfo:@{NSLocalizedDescriptionKey: message}];
+}
+
+@implementation RKBridge
+
++ (BOOL)isAvailable {
+    Class store = NSClassFromString(@"REMStore");
+    Class save = NSClassFromString(@"REMSaveRequest");
+    Class oid = NSClassFromString(@"REMObjectID");
+    return store && save && oid
+        && [store instancesRespondToSelector:@selector(fetchReminderWithObjectID:error:)]
+        && [save instancesRespondToSelector:@selector(updateReminder:)]
+        && [save instancesRespondToSelector:@selector(saveSynchronouslyWithError:)];
+}
+
++ (nullable id)fetch:(NSString *)identifier store:(REMStore *)store error:(NSError **)error {
+    if (![self isAvailable]) { if (error) *error = RKError(@"ReminderKit isn't available on this macOS version"); return nil; }
+    NSURL *url = [NSURL URLWithString:[NSString stringWithFormat:@"x-apple-reminderkit://REMCDReminder/%@", identifier]];
+    id objectID = url ? [NSClassFromString(@"REMObjectID") objectIDWithURL:url] : nil;
+    if (!objectID) { if (error) *error = RKError(@"Bad reminder id"); return nil; }
+    NSError *fetchError = nil;
+    id reminder = [store fetchReminderWithObjectID:objectID error:&fetchError];
+    if (!reminder && error) *error = fetchError ?: RKError(@"Reminder not found");
+    return reminder;
+}
+
++ (nullable NSDictionary *)listsAndGroupsWithError:(NSError **)error {
+    if (![self isAvailable]) { if (error) *error = RKError(@"ReminderKit isn't available on this macOS version"); return nil; }
+    @try {
+        id store = [NSClassFromString(@"REMStore") new];
+        NSError *e = nil;
+        NSArray *accounts = [store fetchAccountsWithError:&e];
+        if (!accounts) { if (error) *error = e ?: RKError(@"Couldn't read Reminders accounts"); return nil; }
+        NSMutableArray *lists = [NSMutableArray array];
+        NSMutableDictionary<NSString *, NSDictionary *> *groups = [NSMutableDictionary dictionary];
+        for (id account in accounts) {
+            if ([KV(account, @"inactive") boolValue]) continue;
+            NSString *accountName = [KV(account, @"name") description] ?: @"";
+            NSString *accountID = UUIDOf(KV(account, @"objectID")) ?: @"";
+            NSArray *ls = [account respondsToSelector:@selector(fetchListsAndSublistsWithError:)]
+                ? [account fetchListsAndSublistsWithError:nil] : [account fetchListsWithError:nil];
+            for (id list in ls) {
+                if ([KV(list, @"isGroup") boolValue]) continue;
+                NSString *listID = UUIDOf(KV(list, @"objectID"));
+                if (!listID) continue;
+                NSMutableDictionary *o = [@{@"id": listID, @"name": [KV(list, @"name") description] ?: @"",
+                                            @"account": accountName, @"accountId": accountID} mutableCopy];
+                id parentID = KV(list, @"parentListID");
+                NSString *groupID = parentID ? UUIDOf(parentID) : nil;
+                if (groupID) {
+                    if (!groups[groupID]) {
+                        id group = [store fetchListIncludingSpecialContainerWithObjectID:parentID error:nil];
+                        groups[groupID] = @{@"id": groupID, @"name": [KV(group, @"name") description] ?: @"", @"account": accountName};
+                    }
+                    o[@"groupId"] = groupID;
+                    o[@"groupName"] = groups[groupID][@"name"];
+                }
+                [lists addObject:o];
+            }
+        }
+        return @{@"lists": lists, @"groups": groups.allValues};
+    } @catch (NSException *e) {
+        if (error) *error = RKError([NSString stringWithFormat:@"ReminderKit: %@", e.reason]);
+        return nil;
+    }
+}
+
++ (nullable NSArray<NSDictionary *> *)remindersInLists:(NSArray<NSString *> *)listIDs includeCompleted:(BOOL)includeCompleted error:(NSError **)error {
+    if (![self isAvailable]) { if (error) *error = RKError(@"ReminderKit isn't available on this macOS version"); return nil; }
+    @try {
+        id store = [NSClassFromString(@"REMStore") new];
+        NSMutableArray *out = [NSMutableArray array];
+        for (NSString *listID in listIDs) {
+            NSURL *url = [NSURL URLWithString:[NSString stringWithFormat:@"x-apple-reminderkit://REMCDList/%@", listID]];
+            id objectID = url ? [NSClassFromString(@"REMObjectID") objectIDWithURL:url] : nil;
+            id list = objectID ? [store fetchListWithObjectID:objectID error:nil] : nil;
+            if (!list) continue;
+            NSArray *rs = [list respondsToSelector:@selector(fetchRemindersAndSubtasksWithError:)]
+                ? [list fetchRemindersAndSubtasksWithError:nil] : [list fetchRemindersWithError:nil];
+            for (id r in rs) {
+                BOOL completed = [KV(r, @"completed") boolValue];
+                if (completed && !includeCompleted) continue;
+                NSString *rid = UUIDOf(KV(r, @"objectID"));
+                if (!rid) continue;
+                NSMutableDictionary *o = [NSMutableDictionary dictionary];
+                o[@"id"] = rid;
+                o[@"title"] = ([r respondsToSelector:@selector(titleAsString)] ? [r titleAsString] : [KV(r, @"title") description]) ?: @"";
+                NSString *notes = [r respondsToSelector:NSSelectorFromString(@"notesAsString")] ? KV(r, @"notesAsString") : nil;
+                if ([notes isKindOfClass:[NSString class]] && notes.length) o[@"notes"] = notes;
+                o[@"listId"] = listID;
+                o[@"completed"] = @(completed);
+                if (completed) { NSString *c = ISODate(KV(r, @"completionDate")); if (c) o[@"completedAt"] = c; }
+                o[@"priority"] = KV(r, @"priority") ?: @0;
+                BOOL hasTime = NO;
+                NSString *due = ComponentsString(KV(r, @"dueDateComponents"), &hasTime);
+                if (due) { o[@"due"] = due; }
+                NSString *start = ComponentsString(KV(r, @"startDateComponents"), NULL);
+                if (start) o[@"start"] = start;
+                o[@"flagged"] = @([KV(r, @"flagged") boolValue]);
+                NSMutableArray *tags = [NSMutableArray array];
+                id hashtags = KV(r, @"hashtags");
+                for (id t in ([hashtags respondsToSelector:@selector(allObjects)] ? [hashtags allObjects] : hashtags)) {
+                    NSString *name = [KV(t, @"name") description];
+                    if (name.length && ![tags containsObject:name]) [tags addObject:name];
+                }
+                [tags sortUsingSelector:@selector(localizedCaseInsensitiveCompare:)];
+                o[@"tags"] = tags;
+                NSString *parent = UUIDOf(KV(r, @"parentReminderID"));
+                if (parent) o[@"parentId"] = parent;
+                NSMutableArray *urls = [NSMutableArray array];
+                for (id a in KV(r, @"attachments")) {
+                    id u = KV(a, @"url");
+                    if ([u isKindOfClass:[NSURL class]] && ![(NSURL *)u isFileURL]) [urls addObject:[(NSURL *)u absoluteString]];
+                }
+                if (urls.count) o[@"urls"] = urls;
+                NSString *created = ISODate(KV(r, @"creationDate")); if (created) o[@"created"] = created;
+                NSString *modified = ISODate(KV(r, @"lastModifiedDate")); if (modified) o[@"modified"] = modified;
+                if ([KV(r, @"recurrenceRules") count]) o[@"recurring"] = @YES;
+                [out addObject:o];
+            }
+        }
+        return out;
+    } @catch (NSException *e) {
+        if (error) *error = RKError([NSString stringWithFormat:@"ReminderKit: %@", e.reason]);
+        return nil;
+    }
+}
+
++ (nullable NSString *)titleOfReminder:(NSString *)identifier error:(NSError **)error {
+    @try {
+        REMStore *store = [NSClassFromString(@"REMStore") new];
+        id reminder = [self fetch:identifier store:store error:error];
+        if (!reminder) return nil;
+        if ([reminder respondsToSelector:@selector(titleAsString)]) return [reminder titleAsString] ?: @"";
+        id title = [reminder valueForKey:@"title"];
+        return [title isKindOfClass:[NSString class]] ? title : [title description];
+    } @catch (NSException *e) {
+        if (error) *error = RKError([NSString stringWithFormat:@"ReminderKit: %@", e.reason]);
+        return nil;
+    }
+}
+
++ (nullable NSArray<NSString *> *)tagsOfReminder:(NSString *)identifier error:(NSError **)error {
+    @try {
+        REMStore *store = [NSClassFromString(@"REMStore") new];
+        id reminder = [self fetch:identifier store:store error:error];
+        if (!reminder) return nil;
+        NSMutableArray *tags = [NSMutableArray array];
+        id hashtags = KV(reminder, @"hashtags");
+        for (id t in ([hashtags respondsToSelector:@selector(allObjects)] ? [hashtags allObjects] : hashtags)) {
+            NSString *name = [KV(t, @"name") description];
+            if (name.length && ![tags containsObject:name]) [tags addObject:name];
+        }
+        return tags;
+    } @catch (NSException *e) {
+        if (error) *error = RKError([NSString stringWithFormat:@"ReminderKit: %@", e.reason]);
+        return nil;
+    }
+}
+
++ (BOOL)change:(NSString *)identifier error:(NSError **)error with:(BOOL (^)(REMReminderChangeItem *change, NSError **error))edit {
+    @try {
+        REMStore *store = [NSClassFromString(@"REMStore") new];
+        id reminder = [self fetch:identifier store:store error:error];
+        if (!reminder) return NO;
+        REMSaveRequest *save = [[NSClassFromString(@"REMSaveRequest") alloc] initWithStore:store];
+        REMReminderChangeItem *change = [save updateReminder:reminder];
+        if (!change) { if (error) *error = RKError(@"Couldn't start a ReminderKit change"); return NO; }
+        if (!edit(change, error)) return NO;
+        return [save saveSynchronouslyWithError:error];
+    } @catch (NSException *e) {
+        if (error) *error = RKError([NSString stringWithFormat:@"ReminderKit: %@", e.reason]);
+        return NO;
+    }
+}
+
++ (BOOL)setTags:(NSArray<NSString *> *)tags onReminder:(NSString *)identifier error:(NSError **)error {
+    return [self change:identifier error:error with:^BOOL(REMReminderChangeItem *change, NSError **err) {
+        id context = [change respondsToSelector:@selector(hashtagContext)] ? [change hashtagContext] : nil;
+        if (!context || ![context respondsToSelector:@selector(removeAllHashtags)] || ![context respondsToSelector:@selector(addHashtagWithType:name:)]) {
+            if (err) *err = RKError(@"ReminderKit tags aren't available on this macOS version");
+            return NO;
+        }
+        [context removeAllHashtags];
+        for (NSString *tag in tags) {
+            if (tag.length) [context addHashtagWithType:1 name:tag];
+        }
+        return YES;
+    }];
+}
+
++ (BOOL)setFlagged:(BOOL)flagged onReminder:(NSString *)identifier error:(NSError **)error {
+    return [self change:identifier error:error with:^BOOL(REMReminderChangeItem *change, NSError **err) {
+        id context = [change respondsToSelector:@selector(flaggedContext)] ? [change flaggedContext] : nil;
+        if (!context || ![context respondsToSelector:@selector(setFlagged:)]) {
+            if (err) *err = RKError(@"ReminderKit flags aren't available on this macOS version");
+            return NO;
+        }
+        [context setFlagged:flagged ? 1 : 0];
+        return YES;
+    }];
+}
+
+@end
