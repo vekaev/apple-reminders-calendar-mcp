@@ -34,6 +34,14 @@ Apple's public API (EventKit) [can't see list groups, tags, subtasks or flags](h
 
 ## Install
 
+### Claude Desktop — one click
+
+Download **`apple-reminders-calendar.mcpb`** from the [latest release](https://github.com/vekaev/apple-reminders-calendar-mcp/releases/latest) and double-click it. Claude Desktop installs it as an extension; it shows up under **+ → Connectors** with an on/off switch.
+
+The first time it's used, macOS asks for access to Reminders and Calendars on behalf of **apple-reminders-calendar-mcp** — choose **Allow Full Access**.
+
+### From source (any MCP client)
+
 Requirements: macOS 14 or later, Xcode or the Command Line Tools (`xcode-select --install`).
 
 ```bash
@@ -72,7 +80,7 @@ command = "/Users/YOU/.local/bin/apple-reminders-calendar-mcp"
 
 ### Permissions
 
-The first time a client starts the server, macOS asks for access to **Reminders** and **Calendars** on behalf of that app (Claude, Cursor, Terminal…). Choose **Allow Full Access**. If you missed it: System Settings → Privacy & Security → Reminders / Calendars → turn on the app → restart it.
+The first time the server needs Reminders or Calendar, **macOS asks you directly** — for *apple-reminders-calendar-mcp* itself, whichever app started it (Claude, Cursor, Codex, a terminal). Choose **Allow Full Access**. (The server launches itself as its own "responsible process", so it doesn't depend on the client app declaring Reminders/Calendar access — many don't, and macOS then refuses silently.) If you clicked Don't Allow: System Settings → Privacy & Security → Reminders / Calendars → turn on *apple-reminders-calendar-mcp*.
 
 Check from a terminal: `apple-reminders-calendar-mcp --check`
 

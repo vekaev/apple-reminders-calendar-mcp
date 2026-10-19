@@ -65,6 +65,13 @@ final class Reminders {
 
     /// A list by id, or by exact name when that name is unique.
     func list(_ ref: String) throws -> EKCalendar {
+        do { return try findList(ref) } catch {
+            ek.reset() // maybe created after our cache was filled
+            return try findList(ref)
+        }
+    }
+
+    private func findList(_ ref: String) throws -> EKCalendar {
         let all = ek.calendars(for: .reminder)
         if let byID = all.first(where: { $0.calendarIdentifier == ref }) { return byID }
         let named = all.filter { $0.title == ref }
@@ -106,6 +113,8 @@ final class Reminders {
     }
 
     func reminder(_ id: String) throws -> EKReminder {
+        if let r = ek.calendarItem(withIdentifier: id) as? EKReminder { return r }
+        ek.reset()
         guard let r = ek.calendarItem(withIdentifier: id) as? EKReminder else { throw ToolError("No reminder with id \(id).") }
         return r
     }

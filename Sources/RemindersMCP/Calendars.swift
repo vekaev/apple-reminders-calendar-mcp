@@ -33,6 +33,13 @@ final class Calendars {
 
     /// A calendar by id or unique title.
     func calendar(_ ref: String) throws -> EKCalendar {
+        do { return try findCalendar(ref) } catch {
+            ek.reset() // maybe created after our cache was filled
+            return try findCalendar(ref)
+        }
+    }
+
+    private func findCalendar(_ ref: String) throws -> EKCalendar {
         let all = ek.calendars(for: .event)
         if let c = all.first(where: { $0.calendarIdentifier == ref }) { return c }
         let named = all.filter { $0.title == ref }
@@ -53,6 +60,8 @@ final class Calendars {
     }
 
     func event(_ id: String) throws -> EKEvent {
+        if let e = ek.event(withIdentifier: id) { return e }
+        ek.reset()
         guard let e = ek.event(withIdentifier: id) else { throw ToolError("No event with id \(id).") }
         return e
     }

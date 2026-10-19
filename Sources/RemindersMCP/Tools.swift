@@ -76,6 +76,8 @@ final class Toolbox {
     }
 
     func call(_ name: String, _ args: JSON) throws -> Any {
+        // The server runs for a long time; lists and calendars may have been added since the last call.
+        reminders.ek.refreshSourcesIfNecessary()
         switch name {
         case "reminders_lists": return try lists()
         case "reminders_get": return try get(args)

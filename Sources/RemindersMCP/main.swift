@@ -3,7 +3,8 @@ import Foundation
 // apple-reminders-calendar-mcp — an MCP server (stdio, JSON-RPC 2.0) for Apple Reminders and Calendar.
 // `--version` prints the version; `--check` reports permissions and what's available, then exits.
 
-let version = "0.1.1"
+let version = "0.2.0"
+Responsibility.disclaimIfNeeded()
 let toolbox = Toolbox()
 
 func send(_ object: JSON) {

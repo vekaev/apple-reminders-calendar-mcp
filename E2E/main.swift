@@ -189,14 +189,41 @@ func dayString(_ c: DateComponents?) -> String? {
 
 // MARK: - Setup
 
-let binary = CommandLine.arguments.dropFirst().first
+let binary = CommandLine.arguments.dropFirst().first { !$0.hasPrefix("--") }
     ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin/apple-reminders-calendar-mcp").path
 guard FileManager.default.isExecutableFile(atPath: binary) else { print("No server binary at \(binary)"); exit(2) }
 
+Responsibility.disclaimIfNeeded() // ask for access as ourselves, not as the app that started us
 let access = DispatchSemaphore(value: 0)
+let calendarAccess = DispatchSemaphore(value: 0)
+ek.requestFullAccessToEvents { _, _ in calendarAccess.signal() }
+calendarAccess.wait()
 ek.requestFullAccessToReminders { _, _ in access.signal() }
 access.wait()
 guard EKEventStore.authorizationStatus(for: .reminder) == .fullAccess else { print("This test runner needs Reminders full access."); exit(2) }
+
+/// Removes every "[e2e] …" list and calendar (leftovers from an interrupted run). Retries while iCloud catches up.
+func removeLeftovers(matching stamp: String? = nil) -> [String] {
+    var problems: [String] = []
+    for attempt in 0..<5 {
+        fresh()
+        let lists = ek.calendars(for: .reminder).filter { $0.title.hasPrefix("[e2e] ") && (stamp.map($0.title.contains) ?? true) }
+        let cals = ek.calendars(for: .event).filter { $0.title.hasPrefix("[e2e] ") && (stamp.map($0.title.contains) ?? true) }
+        if lists.isEmpty && cals.isEmpty { return [] }
+        problems = []
+        for c in lists + cals {
+            do { try ek.removeCalendar(c, commit: true) } catch { problems.append("\(c.title): \(error.localizedDescription)") }
+        }
+        if attempt < 4 { Thread.sleep(forTimeInterval: 2) }
+    }
+    return problems
+}
+
+if CommandLine.arguments.contains("--cleanup") {
+    let problems = removeLeftovers()
+    print(problems.isEmpty ? "No e2e leftovers." : "Couldn't remove:\n" + problems.joined(separator: "\n"))
+    exit(problems.isEmpty ? 0 : 1)
+}
 
 let stamp = String(Int(Date().timeIntervalSince1970) % 1_000_000)
 let prefix = "[e2e]"
@@ -480,12 +507,18 @@ if EKEventStore.authorizationStatus(for: .event) != .fullAccess || server.tool("
     do {
         try ek.saveCalendar(cal, commit: true)
         testCalendar = cal
+        // A new iCloud calendar takes a moment to reach other processes (like the server).
+        let waitStart = Date()
+        while Date().timeIntervalSince(waitStart) < 30,
+              !((server.tool("calendar_calendars").value as? [JSON]) ?? []).contains(where: { $0["id"] as? String == cal.calendarIdentifier }) {
+            Thread.sleep(forTimeInterval: 1)
+        }
         let evTitle = "\(prefix) event \(stamp)"
         r = server.change([["op": "create_event", "title": evTitle, "calendar": cal.calendarIdentifier, "start": "2030-01-10 10:00", "end": "2030-01-10 11:30", "location": "Room 1"]])
         let evID = (r.result?["created"] as? [JSON])?.first?["id"] as? String ?? ""
         fresh()
         let ev = ek.event(withIdentifier: evID)
-        check(ev?.title == evTitle && ev?.calendar.calendarIdentifier == cal.calendarIdentifier, "create event in the right calendar")
+        check(ev?.title == evTitle && ev?.calendar.calendarIdentifier == cal.calendarIdentifier, "create event in the right calendar", r.error ?? "event: \(String(describing: ev?.title))")
         check(ev.map { $0.endDate.timeIntervalSince($0.startDate) } == 5400, "…with the right times")
         let listed = (server.tool("calendar_events", ["from": "2030-01-10", "to": "2030-01-11", "calendars": [cal.calendarIdentifier]]).value as? [JSON]) ?? []
         check(listed.compactMap { $0["id"] as? String } == [evID], "read events in a date range")
@@ -510,8 +543,8 @@ if ProcessInfo.processInfo.environment["E2E_KEEP"] != nil {
 }
 fresh()
 for id in createdInDefault { if let leftover = ekReminder(id) { try? ek.remove(leftover, commit: true) } }
-for cal in [listA, listB, dup1, dup2] { try? ek.removeCalendar(cal, commit: true) }
-if let testCalendar { try? ek.removeCalendar(testCalendar, commit: true) }
+let cleanupProblems = removeLeftovers(matching: stamp)
+check(cleanupProblems.isEmpty, "test lists and calendar removed", cleanupProblems.joined(separator: "; "))
 fresh()
 let stillThere = ek.calendars(for: .reminder).filter { $0.title.hasPrefix(prefix) && $0.title.contains(stamp) }
 check(stillThere.isEmpty, "sandbox lists removed")
