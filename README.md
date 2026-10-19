@@ -136,7 +136,7 @@ Because ReminderKit is private, a macOS update can change it. The server checks 
 - `swift test` — unit tests (no access needed).
 - `swift run -c release e2e` — **end-to-end tests against your real Reminders and Calendar**, black-box: the server is started as a subprocess and driven only over MCP; every result is checked independently through EventKit, Reminders' store and the Reminders app (AppleScript). Everything happens in temporary `[e2e] …` lists and a temporary calendar, which are removed at the end with a check that nothing was left behind. Covers reading lists/groups, create (all fields, default list, unicode), plans-are-previews, refusing invalid or partial plans, update, tags (add/see/filter/remove/replace, case), flags, move, complete/reopen, "no delete", search/filters/paging, a 50-operation plan, backups, and calendar create/read/move.
 
-Known: after an agent changes a flag, Reminders.app on the same Mac can take up to a minute to show it (the change is saved immediately; the e2e tests report this as a warning if it ever takes longer).
+Known: Reminders.app on the same Mac doesn't always refresh right away for changes made outside it — a flag can take up to a minute to show, and lists deleted by the e2e run can linger in its sidebar until you reopen the app. The data itself is changed immediately (iCloud, other devices and the server see it).
 
 ## Roadmap
 

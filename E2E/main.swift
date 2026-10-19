@@ -564,4 +564,5 @@ try? FileManager.default.removeItem(atPath: NSTemporaryDirectory() + "e2e-backup
 print("\n\(passed) passed, \(failed) failed, \(skipped) skipped\(warnings.isEmpty ? "" : ", \(warnings.count) warning(s)")")
 if !warnings.isEmpty { print("\nWarnings (Apple's Reminders app display, not data):"); warnings.forEach { print("  • \($0)") } }
 if !failures.isEmpty { print("\nFailures:"); failures.forEach { print("  • \($0)") } }
+print("\nNote: if Reminders.app was open during the run, its sidebar may keep showing the deleted [e2e] lists until you quit and reopen it (they're gone from your data — check with `e2e --cleanup`).")
 exit(failed == 0 ? 0 : 1)
