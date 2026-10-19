@@ -123,6 +123,13 @@ Dates are `YYYY-MM-DD` (all day) or `YYYY-MM-DD HH:mm` (local time). Lists and c
 
 Because ReminderKit is private, a macOS update can change it. The server checks what's available at startup (`--check`) and falls back to EventKit-only (no groups/tags/flags) instead of failing.
 
+## Testing
+
+- `swift test` — unit tests (no access needed).
+- `swift run -c release e2e` — **end-to-end tests against your real Reminders and Calendar**, black-box: the server is started as a subprocess and driven only over MCP; every result is checked independently through EventKit, Reminders' store and the Reminders app (AppleScript). Everything happens in temporary `[e2e] …` lists and a temporary calendar, which are removed at the end with a check that nothing was left behind. Covers reading lists/groups, create (all fields, default list, unicode), plans-are-previews, refusing invalid or partial plans, update, tags (add/see/filter/remove/replace, case), flags, move, complete/reopen, "no delete", search/filters/paging, a 50-operation plan, backups, and calendar create/read/move.
+
+Known: after an agent changes a flag, Reminders.app on the same Mac can take up to a minute to show it (the change is saved immediately; the e2e tests report this as a warning if it ever takes longer).
+
 ## Roadmap
 
 - Create subtasks and list sections; read sections

@@ -49,9 +49,16 @@ final class Reminders {
             let groups = (snap["groups"] as? [[String: Any]] ?? []).map {
                 GroupInfo(id: $0["id"] as? String ?? "", name: $0["name"] as? String ?? "", account: $0["account"] as? String ?? "")
             }
-            // EventKit is the source of truth for which lists exist (ReminderKit also returns hidden containers).
-            let ekIDs = Set(ek.calendars(for: .reminder).map(\.calendarIdentifier))
-            return (lists.filter { ekIDs.contains($0.id) }, groups)
+            // EventKit is the source of truth for which lists exist: ReminderKit also returns hidden containers,
+            // and skips some lists (e.g. shared ones) — those are added from EventKit, without a group.
+            let ekLists = ek.calendars(for: .reminder)
+            let ekIDs = Set(ekLists.map(\.calendarIdentifier))
+            var merged = lists.filter { ekIDs.contains($0.id) }
+            let known = Set(merged.map(\.id))
+            for c in ekLists where !known.contains(c.calendarIdentifier) {
+                merged.append(ListInfo(id: c.calendarIdentifier, name: c.title, account: c.source.title, groupID: nil, groupName: nil))
+            }
+            return (merged, groups)
         }
         return (ek.calendars(for: .reminder).map { ListInfo(id: $0.calendarIdentifier, name: $0.title, account: $0.source.title, groupID: nil, groupName: nil) }, [])
     }

@@ -24,6 +24,10 @@ let package = Package(
                               "-Xlinker", "Sources/RemindersMCP/Support/Info.plist"]),
             ]
         ),
+        // Black-box end-to-end tests against your real Reminders/Calendar (temporary lists, cleaned up): `swift run e2e`
+        .executableTarget(name: "e2e", path: "E2E", swiftSettings: [.swiftLanguageMode(.v5)],
+                          linkerSettings: [.unsafeFlags(["-Xlinker", "-sectcreate", "-Xlinker", "__TEXT", "-Xlinker", "__info_plist",
+                                                         "-Xlinker", "Sources/RemindersMCP/Support/Info.plist"])]),
         .testTarget(name: "RemindersMCPTests", dependencies: ["RemindersMCP"], swiftSettings: [.swiftLanguageMode(.v5)]),
     ]
 )
