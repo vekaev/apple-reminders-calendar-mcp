@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "apple-reminders-calendar",
   "display_name": "Apple Reminders & Calendar",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Apple Reminders and Calendar on your Mac — list groups, real tags, flags, subtasks. Changes are previewed and need your OK; no delete.",
   "long_description": "Read every Reminders list with its list group, reminders with real tags (the Tags sidebar), flags, subtasks and link attachments, and your calendar events. Create, move, complete and update reminders (including tags and flags) and create or move events — always as a plan you see first, applied only after you approve, with a backup. Native Swift, no Full Disk Access, never touches the Reminders database.",
   "author": { "name": "Yevhenii Petrenko", "url": "https://github.com/vekaev" },

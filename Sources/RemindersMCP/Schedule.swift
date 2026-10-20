@@ -1,3 +1,4 @@
+import CoreLocation
 import EventKit
 import Foundation
 
@@ -7,8 +8,10 @@ enum Schedule {
     /// nil (key absent) leaves alarms alone.
     static func alarms(_ value: Any?) throws -> [EKAlarm]? {
         guard let value else { return nil }
-        guard let list = value as? [String] else { throw ToolError("alarms is a list like [\"2026-10-25 09:00\", \"-15m\"]") }
-        return try list.map { raw in
+        guard let list = value as? [Any] else { throw ToolError("alarms is a list like [\"2026-10-25 09:00\", \"-15m\", {\"when\": \"arrive\", \"place\": \"Office\", \"latitude\": 37.77, \"longitude\": -122.42}]") }
+        return try list.map { item in
+            if let place = item as? [String: Any] { return try locationAlarm(place) }
+            guard let raw = item as? String else { throw ToolError("an alarm is a time, an offset like -15m, or a place") }
             let t = raw.trimmingCharacters(in: .whitespaces).lowercased()
             if let (d, _) = Dates.parse(t) { return EKAlarm(absoluteDate: d) }
             let units: [Character: Double] = ["m": 60, "h": 3600, "d": 86_400]
@@ -17,6 +20,32 @@ enum Schedule {
             }
             return EKAlarm(relativeOffset: -n * mult)
         }
+    }
+
+    /// `{when: arrive|leave, place, latitude, longitude, radius?}` → a location alarm.
+    static func locationAlarm(_ o: [String: Any]) throws -> EKAlarm {
+        let when = (o["when"] as? String ?? "arrive").lowercased()
+        guard when == "arrive" || when == "leave" else { throw ToolError("a place alarm is when: arrive or leave") }
+        guard let lat = (o["latitude"] as? NSNumber)?.doubleValue, let lon = (o["longitude"] as? NSNumber)?.doubleValue else {
+            throw ToolError("a place alarm needs latitude and longitude")
+        }
+        guard (-90...90).contains(lat), (-180...180).contains(lon) else { throw ToolError("latitude is −90…90 and longitude −180…180") }
+        let place = EKStructuredLocation(title: (o["place"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "Location")
+        place.geoLocation = CLLocation(latitude: lat, longitude: lon)
+        place.radius = (o["radius"] as? NSNumber)?.doubleValue ?? 100
+        let alarm = EKAlarm()
+        alarm.structuredLocation = place
+        alarm.proximity = when == "arrive" ? .enter : .leave
+        return alarm
+    }
+
+    /// "arrive Office", "leave Home" for a reminder's location alarms (nil if none).
+    static func locationDescription(_ alarms: [EKAlarm]?) -> String? {
+        let places = (alarms ?? []).compactMap { a -> String? in
+            guard let loc = a.structuredLocation else { return nil }
+            return "\(a.proximity == .leave ? "leave" : "arrive") \(loc.title ?? "place")"
+        }
+        return places.isEmpty ? nil : places.joined(separator: ", ")
     }
 
     /// `{"every": "day|week|month|year", "interval": 2, "until": "2026-12-31"}`; `"none"` / `""` / null stops repeating.

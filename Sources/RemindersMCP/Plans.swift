@@ -14,7 +14,7 @@ final class Planner {
 
     static let maxOps = 100
     static let reminderOps = ["create", "move", "complete", "reopen", "update", "copy", "add_subtasks",
-                              "create_list", "rename_list", "create_group", "move_list"]
+                              "create_list", "rename_list", "create_group", "move_list", "create_section"]
     static let eventOps = ["create_event", "update_event"]
 
     let reminders: Reminders
@@ -54,7 +54,7 @@ final class Planner {
         try checkDates(op)
         let tagChanges = try tagEdits(op)
         if (!tagChanges.add.isEmpty || !tagChanges.remove.isEmpty || op["flagged"] != nil || op["urgent"] != nil
-            || ["add_subtasks", "create_group", "move_list"].contains(kind)) && !reminders.reminderKit {
+            || op.keys.contains("section") || ["add_subtasks", "create_group", "move_list", "create_section"].contains(kind)) && !reminders.reminderKit {
             throw ToolError("tags, flags, urgent, subtasks and list groups need ReminderKit, which isn't available on this macOS version")
         }
         _ = try Schedule.alarms(op["alarms"])
@@ -73,6 +73,7 @@ final class Planner {
         case "reopen":
             return "mark not done \(try reminders.label(try id(op)))"
         case "update":
+            if op.keys.contains("section") { _ = try sectionRef(op["section"], reminderID: try id(op)) }
             let label = try reminders.label(try id(op))
             let d = details(op)
             guard !d.isEmpty else { throw ToolError("update has nothing to change") }
@@ -99,6 +100,11 @@ final class Planner {
             guard !name.isEmpty else { throw ToolError("rename_list needs a name") }
             guard list.allowsContentModifications else { throw ToolError("\(list.title) can't be renamed") }
             return "rename list \(list.title) → \(name)"
+        case "create_section":
+            let list = try reminders.list(op["list"] as? String ?? "")
+            let name = (op["name"] as? String ?? "").trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty else { throw ToolError("create_section needs a name") }
+            return "create section \"\(name)\" in \(list.title)"
         case "create_group":
             let name = (op["name"] as? String ?? "").trimmingCharacters(in: .whitespaces)
             guard !name.isEmpty else { throw ToolError("create_group needs a name") }
@@ -132,6 +138,16 @@ final class Planner {
     private func id(_ op: JSON) throws -> String {
         guard let id = op["id"] as? String, !id.isEmpty else { throw ToolError("\(op["op"] as? String ?? "op") needs an id") }
         return id
+    }
+
+    /// A section of the reminder's list by id or name (nil / NSNull = no section).
+    private func sectionRef(_ value: Any?, reminderID: String) throws -> (id: String, name: String)? {
+        guard let ref = value as? String, !ref.isEmpty else { return nil }
+        let listID = try reminders.reminder(reminderID).calendar.calendarIdentifier
+        let sections = (try? RKBridge.sections(ofList: listID)) ?? []
+        let match = sections.first { $0["id"] as? String == ref } ?? sections.first { ($0["name"] as? String)?.caseInsensitiveCompare(ref) == .orderedSame }
+        guard let m = match, let id = m["id"] as? String else { throw ToolError("No section \"\(ref)\" in that reminder's list") }
+        return (id, m["name"] as? String ?? ref)
     }
 
     /// A list group by id or name (nil / NSNull = no group).
@@ -174,7 +190,14 @@ final class Planner {
         if let f = op["flagged"] as? Bool { parts.append(f ? "flag" : "unflag") }
         if let u = op["urgent"] as? Bool { parts.append(u ? "mark urgent" : "not urgent") }
         if !event, let s = op["start"] as? String { parts.append(s.isEmpty ? "no start date" : "start \(s)") }
-        if let a = op["alarms"] as? [String] { parts.append(a.isEmpty ? "no alarms" : "alarms " + a.joined(separator: ", ")) }
+        if let a = op["alarms"] as? [Any] {
+            let text = a.map { item -> String in
+                if let p = item as? [String: Any] { return "\(p["when"] as? String ?? "arrive") \(p["place"] as? String ?? "place")" }
+                return "\(item)"
+            }
+            parts.append(text.isEmpty ? "no alarms" : "alarms " + text.joined(separator: ", "))
+        }
+        if op.keys.contains("section") { parts.append((op["section"] as? String).map { "into section \($0)" } ?? "out of its section") }
         if let r = op["repeat"] { parts.append((try? Schedule.repeatRule(r)).flatMap { $0 }.map { "repeat " + Schedule.describe($0) } ?? "stop repeating") }
         if let u = op["url"] as? String { parts.append(u.isEmpty ? "clear url" : "url \(u)") }
         if event, let l = op["location"] as? String { parts.append("location \(l)") }
@@ -260,6 +283,10 @@ final class Planner {
             let cal = try reminders.list(op["list"] as? String ?? "")
             cal.title = (op["name"] as? String ?? "").trimmingCharacters(in: .whitespaces)
             try ek.saveCalendar(cal, commit: true)
+        case "create_section":
+            let cal = try reminders.list(op["list"] as? String ?? "")
+            let sid = try RKBridge.createSection((op["name"] as? String ?? "").trimmingCharacters(in: .whitespaces), inList: cal.calendarIdentifier)
+            return ["op": "create_section", "id": sid, "title": op["name"] as? String ?? ""]
         case "create_group":
             guard let anyList = ek.defaultCalendarForNewReminders()?.calendarIdentifier else { throw ToolError("no Reminders account") }
             let gid = try RKBridge.createGroup((op["name"] as? String ?? "").trimmingCharacters(in: .whitespaces), inAccountOfList: anyList)
@@ -281,6 +308,7 @@ final class Planner {
             try applyFields(op, to: r)
             if r.hasChanges { try ek.save(r, commit: true) }
             try applyTagsAndFlag(op, id: id)
+            if op.keys.contains("section") { try RKBridge.putReminder(id, inSection: try sectionRef(op["section"], reminderID: id)?.id) }
         case "create_event":
             let e = EKEvent(eventStore: ek)
             e.title = op["title"] as? String

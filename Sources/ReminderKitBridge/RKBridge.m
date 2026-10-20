@@ -18,6 +18,15 @@
 - (NSArray *)fetchRemindersAndSubtasksWithError:(NSError **)error;
 - (NSArray *)fetchRemindersWithError:(NSError **)error;
 - (NSArray *)fetchGroupsWithError:(NSError **)error;
+- (NSArray *)fetchListSectionsWithListObjectID:(id)objectID error:(NSError **)error;
+- (id)sectionsContextChangeItem;
+- (id)addListSectionWithDisplayName:(NSString *)name toListSectionContextChangeItem:(id)context;
+- (void)setUnsavedSectionIDsOrdering:(id)ordering;
+- (void)setShouldUpdateSectionsOrdering:(BOOL)value;
+- (void)setUnsavedMembershipsOfRemindersInSections:(id)memberships;
+- (id)initWithMemberIdentifier:(id)member groupIdentifier:(id)group isObsolete:(BOOL)obsolete modifiedOn:(id)date;
+- (id)initWithMemberships:(NSArray *)memberships;
+- (id)uuid;
 @end
 
 @interface REMSaveRequest : NSObject
@@ -148,6 +157,10 @@ static NSError *RKError(NSString *message) {
                 if (!listID) continue;
                 NSMutableDictionary *o = [@{@"id": listID, @"name": [KV(list, @"name") description] ?: @"",
                                             @"account": accountName, @"accountId": accountID} mutableCopy];
+                if ([KV(KV(list, @"sectionContext"), @"hasSections") boolValue]) {
+                    NSArray *secs = [self sectionsOfList:listID error:nil];
+                    if (secs.count) o[@"sections"] = secs;
+                }
                 id parentID = KV(list, @"parentListID");
                 NSString *groupID = parentID ? UUIDOf(parentID) : nil;
                 if (groupID) {
@@ -409,6 +422,85 @@ static NSError *RKError(NSString *message) {
         id accountChange = [(id)save updateAccount:[group account]];
         id change = [(id)save updateList:group];
         [change removeFromParentWithAccountChangeItem:accountChange];
+        return [save saveSynchronouslyWithError:error];
+    } @catch (NSException *e) {
+        if (error) *error = RKError([NSString stringWithFormat:@"ReminderKit: %@", e.reason]);
+        return NO;
+    }
+}
+
++ (nullable id)listObjectID:(NSString *)listID {
+    return [NSClassFromString(@"REMObjectID") objectIDWithURL:[NSURL URLWithString:[NSString stringWithFormat:@"x-apple-reminderkit://REMCDList/%@", listID]]];
+}
+
++ (nullable NSArray<NSDictionary *> *)sectionsOfList:(NSString *)listID error:(NSError **)error {
+    @try {
+        id store = [NSClassFromString(@"REMStore") new];
+        NSArray *secs = [store fetchListSectionsWithListObjectID:[self listObjectID:listID] error:error];
+        if (!secs) return nil;
+        NSMutableArray *out = [NSMutableArray array];
+        for (id s in secs) {
+            NSString *sid = UUIDOf(KV(s, @"objectID"));
+            if (sid) [out addObject:@{@"id": sid, @"name": [KV(s, @"displayName") description] ?: @""}];
+        }
+        return out;
+    } @catch (NSException *e) {
+        if (error) *error = RKError([NSString stringWithFormat:@"ReminderKit: %@", e.reason]);
+        return nil;
+    }
+}
+
++ (nullable NSString *)createSection:(NSString *)name inList:(NSString *)listID error:(NSError **)error {
+    @try {
+        REMStore *store = [NSClassFromString(@"REMStore") new];
+        id list = [self fetchList:listID store:store error:error];
+        if (!list) return nil;
+        NSArray *existing = [(id)store fetchListSectionsWithListObjectID:[self listObjectID:listID] error:nil] ?: @[];
+        REMSaveRequest *save = [[NSClassFromString(@"REMSaveRequest") alloc] initWithStore:store];
+        id listChange = [(id)save updateList:list];
+        id context = [listChange respondsToSelector:@selector(sectionsContextChangeItem)] ? [listChange sectionsContextChangeItem] : nil;
+        if (!context) { if (error) *error = RKError(@"Sections aren't available for this list"); return nil; }
+        id section = [(id)save addListSectionWithDisplayName:name toListSectionContextChangeItem:context];
+        id sectionID = [section remObjectID];
+        NSMutableArray *ordering = [NSMutableArray array];
+        for (id s in existing) { id oid = KV(s, @"objectID"); if (oid) [ordering addObject:oid]; }
+        if (sectionID) [ordering addObject:sectionID];
+        [context setUnsavedSectionIDsOrdering:ordering];
+        [context setShouldUpdateSectionsOrdering:YES];
+        if (![save saveSynchronouslyWithError:error]) return nil;
+        return UUIDOf(sectionID);
+    } @catch (NSException *e) {
+        if (error) *error = RKError([NSString stringWithFormat:@"ReminderKit: %@", e.reason]);
+        return nil;
+    }
+}
+
++ (BOOL)putReminder:(NSString *)identifier inSection:(nullable NSString *)sectionID error:(NSError **)error {
+    @try {
+        REMStore *store = [NSClassFromString(@"REMStore") new];
+        id reminder = [self fetch:identifier store:store error:error];
+        if (!reminder) return NO;
+        id list = KV(reminder, @"list");
+        NSString *listID = UUIDOf(KV(list, @"objectID"));
+        NSArray *sections = listID ? [self sectionsOfList:listID error:nil] : nil;
+        NSString *target = sectionID;
+        BOOL obsolete = NO;
+        if (!target) {
+            // Out of any section: an obsolete membership (needs some section of the list as its group).
+            target = [sections.firstObject objectForKey:@"id"];
+            obsolete = YES;
+            if (!target) return YES; // the list has no sections, so the reminder isn't in one
+        }
+        REMSaveRequest *save = [[NSClassFromString(@"REMSaveRequest") alloc] initWithStore:store];
+        id listChange = [(id)save updateList:list];
+        id context = [listChange respondsToSelector:@selector(sectionsContextChangeItem)] ? [listChange sectionsContextChangeItem] : nil;
+        if (![context respondsToSelector:@selector(setUnsavedMembershipsOfRemindersInSections:)]) {
+            if (error) *error = RKError(@"Sections aren't available on this macOS version"); return NO;
+        }
+        NSUUID *member = [[NSUUID alloc] initWithUUIDString:identifier];
+        NSUUID *group = [[NSUUID alloc] initWithUUIDString:target];
+        id membership = [[NSClassFromString(@"REMMembership") alloc] initWithMemberIdentifier:member groupIdentifier:group isObsolete:obsolete modifiedOn:[NSDate date]];
+        [context setUnsavedMembershipsOfRemindersInSections:[[NSClassFromString(@"REMMemberships") alloc] initWithMemberships:@[membership]]];
         return [save saveSynchronouslyWithError:error];
     } @catch (NSException *e) {
         if (error) *error = RKError([NSString stringWithFormat:@"ReminderKit: %@", e.reason]);

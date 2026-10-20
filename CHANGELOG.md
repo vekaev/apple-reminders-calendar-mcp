@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.0 — 2026-10-20
+
+- **List sections**: `reminders_lists` shows each list's sections; new `create_section` op; `update`/`create` take `section` (name or id, `null` takes the reminder out). Which section a reminder is in can't be read (Apple keeps it only in the database).
+- **Location alarms**: `alarms` accepts `{when: arrive|leave, place, latitude, longitude, radius?}`; reads show `locationAlarm` ("arrive Office").
+- e2e: 161 checks.
+
 ## 0.3.0 — 2026-10-19
 - **Urgent** (read, filter, set), **start date**, **alarms** (at a time or before the due time), **repeat** (every day/week/month/year, interval, until).
 - **Copy** a reminder — to any list, optionally renamed — with notes, dates, repeat, alarms, tags, flag, urgent and subtasks.

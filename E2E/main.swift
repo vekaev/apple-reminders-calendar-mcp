@@ -566,6 +566,37 @@ r = server.change([["op": "copy", "id": emojiID, "newTitle": "\(prefix) copy tit
 let copy2 = (r.result?["created"] as? [JSON])?.first?["id"] as? String ?? ""
 check(ekReminder(copy2)?.title == "\(prefix) copy title \(stamp)" && ekReminder(copy2)?.calendar.calendarIdentifier == listA.calendarIdentifier, "copy in the same list with a new title")
 
+section("Sections")
+r = server.change([["op": "create_section", "list": listA.calendarIdentifier, "name": "Morning \(stamp)"]])
+check(r.error == nil, "create a section in a list", r.error ?? "")
+func sectionsOf(_ listID: String) -> [JSON] {
+    let all = (listJSON()["groups"] as? [JSON] ?? []).flatMap { $0["lists"] as? [JSON] ?? [] } + (listJSON()["ungrouped"] as? [JSON] ?? [])
+    return all.first { $0["id"] as? String == listID }?["sections"] as? [JSON] ?? []
+}
+var secWait = 0
+while !sectionsOf(listA.calendarIdentifier).contains(where: { $0["name"] as? String == "Morning \(stamp)" }) && secWait < 15 { Thread.sleep(forTimeInterval: 1); secWait += 1 }
+let morning = sectionsOf(listA.calendarIdentifier).first { $0["name"] as? String == "Morning \(stamp)" }
+check(morning != nil, "the list shows its sections")
+r = server.change([["op": "update", "id": emojiID, "section": "Morning \(stamp)"]])
+check(r.error == nil, "put a reminder into a section", r.error ?? "")
+r = server.change([["op": "update", "id": emojiID, "section": NSNull()]])
+check(r.error == nil, "take it out of the section", r.error ?? "")
+check(server.plan([["op": "update", "id": emojiID, "section": "No such section \(stamp)"]]).id == nil, "unknown section refused")
+check(server.plan([["op": "create_section", "list": listA.calendarIdentifier, "name": " "]]).id == nil, "a section needs a name")
+
+section("Location alarms")
+r = server.change([["op": "update", "id": emojiID, "alarms": [["when": "arrive", "place": "Office", "latitude": 37.7749, "longitude": -122.4194, "radius": 150]]]])
+check(r.error == nil, "remind when arriving somewhere", r.error ?? "")
+var loc = ekAlarms(emojiID).first
+check(loc?.proximity == .enter && loc?.structuredLocation?.title == "Office", "…an arrive alarm at that place", "\(String(describing: loc?.proximity)) \(loc?.structuredLocation?.title ?? "nil")")
+check(abs((loc?.structuredLocation?.geoLocation?.coordinate.latitude ?? 0) - 37.7749) < 0.0001 && (loc?.structuredLocation?.radius ?? 0) == 150, "…with its coordinates and radius")
+check(server.get(["list": listA.calendarIdentifier]).first { $0["id"] as? String == emojiID }.map { ($0["locationAlarm"] as? String ?? "").contains("Office") } == true, "reading shows the location alarm")
+r = server.change([["op": "update", "id": emojiID, "alarms": [["when": "leave", "place": "Home", "latitude": 37.0, "longitude": -122.0], "-10m"]]])
+let leaveAlarms = ekAlarms(emojiID)
+check(leaveAlarms.contains { $0.proximity == .leave && $0.structuredLocation?.title == "Home" } && leaveAlarms.count == 2, "leave alarm plus a time alarm together")
+check(server.plan([["op": "update", "id": emojiID, "alarms": [["when": "arrive", "place": "X"]]]]).id == nil, "a place needs coordinates")
+check(server.plan([["op": "update", "id": emojiID, "alarms": [["when": "arrive", "place": "X", "latitude": 99, "longitude": 0]]]]).id == nil, "invalid coordinates refused")
+
 section("Lists and groups")
 let groupName = "\(prefix) Group \(stamp)", newListName = "\(prefix) New list \(stamp)"
 r = server.change([["op": "create_group", "name": groupName]])

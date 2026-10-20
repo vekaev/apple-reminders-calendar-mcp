@@ -32,6 +32,12 @@ NS_ASSUME_NONNULL_BEGIN
 + (BOOL)setGroup:(nullable NSString *)groupID forList:(NSString *)listID error:(NSError **)error NS_SWIFT_NAME(setGroup(_:forList:));
 /// Removes an (empty or not) list group; its lists move out of it. Used by tests to clean up — the server never deletes.
 + (BOOL)deleteGroup:(NSString *)groupID error:(NSError **)error;
+/// A list's sections, in order: [{id, name}].
++ (nullable NSArray<NSDictionary *> *)sectionsOfList:(NSString *)listID error:(NSError **)error NS_SWIFT_NAME(sections(ofList:));
+/// Adds a section at the end of a list; returns its id.
++ (nullable NSString *)createSection:(NSString *)name inList:(NSString *)listID error:(NSError **)error NS_SWIFT_NAME(createSection(_:inList:));
+/// Puts a reminder in a section of its list (nil takes it out of any section).
++ (BOOL)putReminder:(NSString *)identifier inSection:(nullable NSString *)sectionID error:(NSError **)error NS_SWIFT_NAME(putReminder(_:inSection:));
 /// Sets or clears the flag.
 + (BOOL)setFlagged:(BOOL)flagged onReminder:(NSString *)identifier error:(NSError **)error;
 @end

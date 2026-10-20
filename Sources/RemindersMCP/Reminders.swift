@@ -31,6 +31,7 @@ final class Reminders {
         let account: String
         let groupID: String?
         let groupName: String?
+        var sections: [[String: String]] = []
     }
 
     struct GroupInfo {
@@ -44,7 +45,8 @@ final class Reminders {
         if reminderKit, let snap = try? RKBridge.listsAndGroups() {
             let lists = (snap["lists"] as? [[String: Any]] ?? []).map {
                 ListInfo(id: $0["id"] as? String ?? "", name: $0["name"] as? String ?? "", account: $0["account"] as? String ?? "",
-                         groupID: $0["groupId"] as? String, groupName: $0["groupName"] as? String)
+                         groupID: $0["groupId"] as? String, groupName: $0["groupName"] as? String,
+                         sections: ($0["sections"] as? [[String: Any]] ?? []).map { ["id": $0["id"] as? String ?? "", "name": $0["name"] as? String ?? ""] })
             }
             let groups = (snap["groups"] as? [[String: Any]] ?? []).map {
                 GroupInfo(id: $0["id"] as? String ?? "", name: $0["name"] as? String ?? "", account: $0["account"] as? String ?? "")
@@ -92,9 +94,10 @@ final class Reminders {
             return rows.map { row in
                 var o = row as? JSON ?? [:]
                 o["list"] = names[o["listId"] as? String ?? ""] ?? ""
-                if o["recurring"] as? Bool == true, let id = o["id"] as? String,
-                   let rule = (ek.calendarItem(withIdentifier: id) as? EKReminder)?.recurrenceRules?.first {
-                    o["repeat"] = Schedule.describe(rule)
+                if o["recurring"] as? Bool == true || (o["alarms"] as? Int ?? 0) > 0, let id = o["id"] as? String,
+                   let ekr = ek.calendarItem(withIdentifier: id) as? EKReminder {
+                    if let rule = ekr.recurrenceRules?.first { o["repeat"] = Schedule.describe(rule) }
+                    if let place = Schedule.locationDescription(ekr.alarms) { o["locationAlarm"] = place }
                 }
                 return o
             }
@@ -148,6 +151,7 @@ final class Reminders {
         if r.hasRecurrenceRules { o["recurring"] = true }
         if let rule = r.recurrenceRules?.first { o["repeat"] = Schedule.describe(rule) }
         if let alarms = r.alarms, !alarms.isEmpty { o["alarms"] = alarms.count }
+        if let place = Schedule.locationDescription(r.alarms) { o["locationAlarm"] = place }
         return o
     }
 

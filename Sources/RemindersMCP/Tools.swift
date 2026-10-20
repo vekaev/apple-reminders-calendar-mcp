@@ -9,6 +9,8 @@ Reminder ops:
 • {op:"update", id, newTitle?, due? ("" clears), start? ("" clears), priority? (0 none, 1 high, 5 medium, 9 low), notes? ("" clears), appendNotes?, url?, tags? (replace all), addTags?, removeTags?, flagged?, urgent?, alarms? (["2026-10-25 09:00", "-15m", "-2h", "-1d"]; [] clears), repeat? ({every: day|week|month|year, interval?, until?} or "none")}
 • {op:"copy", id, list?, newTitle?} — duplicate with notes, dates, tags, flag, urgent, subtasks
 • {op:"add_subtasks", id, titles:[…]}
+• {op:"create_section", list, name} · update's section? (section name or id in the reminder's list, null = out of sections; which section a reminder is in can't be read)
+• alarms also take places: {when: "arrive"|"leave", place, latitude, longitude, radius? (m)}
 • {op:"create_list", name, group?} · {op:"rename_list", list, name} · {op:"create_group", name} · {op:"move_list", list, group (id, name or null)}
 Calendar ops:
 • {op:"create_event", title, start, end?, allDay?, calendar?, location?, notes?, url?}
@@ -118,6 +120,7 @@ final class Toolbox {
         let defaultID = reminders.ek.defaultCalendarForNewReminders()?.calendarIdentifier
         func item(_ l: Reminders.ListInfo) -> JSON {
             var o: JSON = ["id": l.id, "name": l.name, "open": open[l.id] ?? 0]
+            if !l.sections.isEmpty { o["sections"] = l.sections }
             if l.id == defaultID { o["default"] = true }
             return o
         }
