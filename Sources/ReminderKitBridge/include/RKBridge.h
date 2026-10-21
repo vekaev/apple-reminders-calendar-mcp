@@ -25,6 +25,8 @@ NS_ASSUME_NONNULL_BEGIN
 /// Marks the reminder Urgent (an alarm that rings like a timer) or not.
 + (BOOL)setUrgent:(BOOL)urgent onReminder:(NSString *)identifier error:(NSError **)error;
 /// Adds subtasks under the reminder; returns their ids.
+/// Attaches an image (JPEG/PNG/HEIC data) to a reminder, like dropping a photo into Reminders.app. Syncs through iCloud.
++ (BOOL)addImageData:(NSData *)data uti:(NSString *)uti width:(NSUInteger)width height:(NSUInteger)height toReminder:(NSString *)identifier error:(NSError **)error NS_SWIFT_NAME(addImage(_:uti:width:height:toReminder:));
 + (nullable NSArray<NSString *> *)addSubtasks:(NSArray<NSString *> *)titles toReminder:(NSString *)identifier error:(NSError **)error NS_SWIFT_NAME(addSubtasks(_:toReminder:));
 /// Creates a list group in the account of `listInAccount` (any list id); returns the group id.
 + (nullable NSString *)createGroup:(NSString *)name inAccountOfList:(NSString *)listInAccount error:(NSError **)error NS_SWIFT_NAME(createGroup(_:inAccountOfList:));

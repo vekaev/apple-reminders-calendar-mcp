@@ -1,3 +1,4 @@
+import ImageIO
 import EventKit
 import Foundation
 import ReminderKitBridge
@@ -13,7 +14,7 @@ final class Planner {
     }
 
     static let maxOps = 100
-    static let reminderOps = ["create", "move", "complete", "reopen", "update", "copy", "add_subtasks",
+    static let reminderOps = ["create", "move", "complete", "reopen", "update", "copy", "add_subtasks", "add_images",
                               "create_list", "rename_list", "create_group", "move_list", "create_section"]
     static let eventOps = ["create_event", "update_event"]
 
@@ -54,7 +55,7 @@ final class Planner {
         try checkDates(op)
         let tagChanges = try tagEdits(op)
         if (!tagChanges.add.isEmpty || !tagChanges.remove.isEmpty || op["flagged"] != nil || op["urgent"] != nil
-            || op.keys.contains("section") || ["add_subtasks", "create_group", "move_list", "create_section"].contains(kind)) && !reminders.reminderKit {
+            || op.keys.contains("section") || ["add_subtasks", "add_images", "create_group", "move_list", "create_section"].contains(kind)) && !reminders.reminderKit {
             throw ToolError("tags, flags, urgent, subtasks and list groups need ReminderKit, which isn't available on this macOS version")
         }
         _ = try Schedule.alarms(op["alarms"])
@@ -88,6 +89,10 @@ final class Planner {
             let titles = (op["titles"] as? [String] ?? []).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
             guard !titles.isEmpty else { throw ToolError("add_subtasks needs titles") }
             return "add \(titles.count) subtask(s) to \(label): " + titles.joined(separator: "; ")
+        case "add_images":
+            let label = try reminders.label(try id(op))
+            let images = try ImageFiles.load(op)
+            return "attach \(images.count) image(s) to \(label): " + images.map(\.name).joined(separator: ", ")
         case "create_list":
             let name = (op["name"] as? String ?? "").trimmingCharacters(in: .whitespaces)
             guard !name.isEmpty else { throw ToolError("create_list needs a name") }
@@ -271,6 +276,13 @@ final class Planner {
             let titles = (op["titles"] as? [String] ?? []).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
             let ids = try RKBridge.addSubtasks(titles, toReminder: id)
             return ["op": "add_subtasks", "parent": id, "ids": ids]
+        case "add_images":
+            let id = try id(op)
+            let images = try ImageFiles.load(op)
+            for image in images {
+                try RKBridge.addImage(image.data, uti: image.uti, width: UInt(image.width), height: UInt(image.height), toReminder: id)
+            }
+            return ["op": "add_images", "id": id, "images": images.map(\.name)]
         case "create_list":
             let cal = EKCalendar(for: .reminder, eventStore: ek)
             cal.title = (op["name"] as? String ?? "").trimmingCharacters(in: .whitespaces)
@@ -421,5 +433,41 @@ final class Planner {
         if let n = op["notes"] as? String { e.notes = n.isEmpty ? nil : n }
         if let add = op["appendNotes"] as? String, !add.isEmpty { e.notes = (e.notes?.isEmpty == false ? e.notes! + "\n" : "") + add }
         if let u = op["url"] as? String { e.url = u.isEmpty ? nil : URL(string: u) }
+    }
+}
+
+
+/// Image files for `add_images` (`path` or `paths`): any format ImageIO reads; anything but JPEG/PNG/HEIC is
+/// re-encoded as JPEG so it shows everywhere Reminders runs. Big photos are scaled to at most 2048 px.
+enum ImageFiles {
+    struct Image { let name: String; let data: Data; let uti: String; let width: Int; let height: Int }
+
+    static func load(_ op: [String: Any]) throws -> [Image] {
+        let paths = (op["paths"] as? [String] ?? []) + ((op["path"] as? String).map { [$0] } ?? [])
+        guard !paths.isEmpty else { throw ToolError("add_images needs path or paths (image files on this Mac)") }
+        guard paths.count <= 10 else { throw ToolError("at most 10 images at once") }
+        return try paths.map(load)
+    }
+
+    static func load(_ path: String) throws -> Image {
+        let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil), let type = CGImageSourceGetType(source) as String?,
+              let cg = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+            throw ToolError("not an image I can read: \(path)")
+        }
+        let keep: Set<String> = ["public.jpeg", "public.png", "public.heic"]
+        let tooBig = max(cg.width, cg.height) > 2048
+        if keep.contains(type), !tooBig, let data = try? Data(contentsOf: url) {
+            return Image(name: url.lastPathComponent, data: data, uti: type, width: cg.width, height: cg.height)
+        }
+        // Re-encode as JPEG (and scale down large photos).
+        let opts: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceThumbnailMaxPixelSize: 2048,
+                                     kCGImageSourceCreateThumbnailWithTransform: true]
+        let image = CGImageSourceCreateThumbnailAtIndex(source, 0, opts as CFDictionary) ?? cg
+        let out = NSMutableData()
+        guard let dest = CGImageDestinationCreateWithData(out, "public.jpeg" as CFString, 1, nil) else { throw ToolError("couldn't encode \(path)") }
+        CGImageDestinationAddImage(dest, image, [kCGImageDestinationLossyCompressionQuality: 0.88] as CFDictionary)
+        guard CGImageDestinationFinalize(dest) else { throw ToolError("couldn't encode \(path)") }
+        return Image(name: url.lastPathComponent, data: out as Data, uti: "public.jpeg", width: image.width, height: image.height)
     }
 }

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.0 — 2026-10-21
+
+- **Images**: new `add_images` op attaches image files to a reminder (shown in Reminders.app like a dropped photo, synced through iCloud). JPEG/PNG/HEIC are kept; WebP and other formats are converted to JPEG; photos over 2048 px are scaled down. `reminders_get` shows `"images": count`. Uses ReminderKit's attachment context.
+
 ## 0.4.0 — 2026-10-20
 
 - **List sections**: `reminders_lists` shows each list's sections; new `create_section` op; `update`/`create` take `section` (name or id, `null` takes the reminder out). Which section a reminder is in can't be read (Apple keeps it only in the database).

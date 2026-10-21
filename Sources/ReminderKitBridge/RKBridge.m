@@ -40,6 +40,7 @@
 - (id)hashtagContext;
 - (id)urgentAlarmContext;
 - (id)subtaskContext;
+- (id)attachmentContext;
 - (id)remObjectID;
 @end
 
@@ -59,6 +60,7 @@
 - (id)addGroupWithName:(NSString *)name toAccountGroupContextChangeItem:(id)context;
 - (id)addGroupWithName:(NSString *)name toAccountGroupContextChangeItem:(id)context groupObjectID:(id)objectID;
 - (id)addReminderWithTitle:(NSString *)title toReminderSubtaskContextChangeItem:(id)context;
+- (id)addImageAttachmentWithData:(NSData *)data uti:(NSString *)uti width:(NSUInteger)width height:(NSUInteger)height;
 @end
 
 @interface REMReminderHashtagContextChangeItem : NSObject
@@ -232,6 +234,10 @@ static NSError *RKError(NSString *message) {
                     if ([u isKindOfClass:[NSURL class]] && ![(NSURL *)u isFileURL]) [urls addObject:[(NSURL *)u absoluteString]];
                 }
                 if (urls.count) o[@"urls"] = urls;
+                NSUInteger images = 0;
+                Class imageClass = NSClassFromString(@"REMImageAttachment");
+                for (id a in KV(r, @"attachments")) if (imageClass && [a isKindOfClass:imageClass]) images++;
+                if (images) o[@"images"] = @(images);
                 NSString *created = ISODate(KV(r, @"creationDate")); if (created) o[@"created"] = created;
                 NSString *modified = ISODate(KV(r, @"lastModifiedDate")); if (modified) o[@"modified"] = modified;
                 if ([KV(r, @"recurrenceRules") count]) o[@"recurring"] = @YES;
@@ -330,6 +336,17 @@ static NSError *RKError(NSString *message) {
         }
         [context setIsUrgentStateEnabledForCurrentUser:urgent];
         return YES;
+    }];
+}
+
++ (BOOL)addImageData:(NSData *)data uti:(NSString *)uti width:(NSUInteger)width height:(NSUInteger)height toReminder:(NSString *)identifier error:(NSError **)error {
+    return [self change:identifier error:error with:^BOOL(REMReminderChangeItem *change, NSError **err) {
+        id context = [change respondsToSelector:@selector(attachmentContext)] ? [change attachmentContext] : nil;
+        if (!context || ![context respondsToSelector:@selector(addImageAttachmentWithData:uti:width:height:)]) {
+            if (err) *err = RKError(@"Image attachments aren't available on this macOS version");
+            return NO;
+        }
+        return [context addImageAttachmentWithData:data uti:uti width:width height:height] != nil;
     }];
 }
 

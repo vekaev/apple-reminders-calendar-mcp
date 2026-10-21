@@ -31,6 +31,7 @@ Apple's public API (EventKit) [can't see list groups, tags, subtasks or flags](h
 | **Copy** a reminder (with tags, subtasks…) | ✅ | ❌ | ❌ |
 | Create **subtasks**, lists, **list groups**; move lists between groups | ✅ | lists only | ❌ |
 | **Subtasks** (parent link) | ✅ read | ❌ | ❌ |
+| Attach **images** to a reminder | ✅ | ❌ | ❌ |
 | **Link attachments** (e.g. shared Instagram/Safari links) | ✅ read | ❌ | ❌ |
 | Move reminders between lists | ✅ | varies | slow |
 | Calendar events — read and plan changes | ✅ | varies | slow |
