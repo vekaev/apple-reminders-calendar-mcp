@@ -87,6 +87,8 @@ command = "/Users/YOU/.local/bin/apple-reminders-calendar-mcp"
 
 The first time the server needs Reminders or Calendar, **macOS asks you directly** — for *apple-reminders-calendar-mcp* itself, whichever app started it (Claude, Cursor, Codex, a terminal). Choose **Allow Full Access**. (The server launches itself as its own "responsible process", so it doesn't depend on the client app declaring Reminders/Calendar access — many don't, and macOS then refuses silently.) If you clicked Don't Allow: System Settings → Privacy & Security → Reminders / Calendars → turn on *apple-reminders-calendar-mcp*.
 
+**Asked again after every update?** macOS remembers the permission by the binary's signature. An ad-hoc signed build (the default for a local `swift build`) counts as a new app each time, so macOS asks again. `scripts/install.sh` and `scripts/e2e.sh` sign with your Apple Development or Developer ID certificate when you have one (or `CODESIGN_IDENTITY`), and then the permission sticks across rebuilds.
+
 Check from a terminal: `apple-reminders-calendar-mcp --check`
 
 ```
@@ -144,7 +146,7 @@ Because ReminderKit is private, a macOS update can change it. The server checks 
 ## Testing
 
 - `swift test` — unit tests (no access needed).
-- `swift run -c release e2e` — **end-to-end tests against your real Reminders and Calendar**, black-box: the server is started as a subprocess and driven only over MCP; every result is checked independently through EventKit, Reminders' store and the Reminders app (AppleScript). Everything happens in temporary `[e2e] …` lists and a temporary calendar, which are removed at the end with a check that nothing was left behind. Covers reading lists/groups, create (all fields, default list, unicode), plans-are-previews, refusing invalid or partial plans, update, tags (add/see/filter/remove/replace, case), flags, move, complete/reopen, "no delete", search/filters/paging, a 50-operation plan, backups, and calendar create/read/move.
+- `./scripts/e2e.sh` — **end-to-end tests against your real Reminders and Calendar**, black-box: the server is started as a subprocess and driven only over MCP; every result is checked independently through EventKit, Reminders' store and the Reminders app (AppleScript). Everything happens in temporary `[e2e] …` lists and a temporary calendar, which are removed at the end with a check that nothing was left behind. Covers reading lists/groups, create (all fields, default list, unicode), plans-are-previews, refusing invalid or partial plans, update, tags (add/see/filter/remove/replace, case), flags, move, complete/reopen, "no delete", search/filters/paging, a 50-operation plan, backups, and calendar create/read/move.
 
 Known: which section a reminder is in can't be read — Apple keeps that only in the Reminders database, which this server never touches. Sections can be listed, created and assigned.
 

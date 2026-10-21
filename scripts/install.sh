@@ -17,6 +17,7 @@ mkdir -p "$DEST"
 # Replace, never overwrite in place: macOS kills a signed binary rewritten under the same inode.
 rm -f "$DEST/$NAME"
 cp "$(swift build -c release --show-bin-path)/$NAME" "$DEST/$NAME"
+./scripts/sign.sh "$DEST/$NAME" dev.vekaev.reminders-mcp
 echo "Installed $DEST/$NAME"
 "$DEST/$NAME" --check || true
 
