@@ -194,6 +194,8 @@ let binary = CommandLine.arguments.dropFirst().first { !$0.hasPrefix("--") }
     ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin/apple-reminders-calendar-mcp").path
 guard FileManager.default.isExecutableFile(atPath: binary) else { print("No server binary at \(binary)"); exit(2) }
 
+StableSignature.ensureSelf() // stable signature first, so macOS remembers the access across rebuilds
+StableSignature.ensure(binary, identifier: StableSignature.serverID)
 Responsibility.disclaimIfNeeded() // ask for access as ourselves, not as the app that started us
 let access = DispatchSemaphore(value: 0)
 let calendarAccess = DispatchSemaphore(value: 0)
